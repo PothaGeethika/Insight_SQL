@@ -7,8 +7,12 @@ def generate_sql(question, schema, llm):
     
     User question: {question}
     
-    Write ONLY the SQL query, nothing else.
+    Write ONLY a SINGLE SQL query, nothing else.
+    If you need to return multiple facts (like counting tables and columns), combine them into ONE single result row using subqueries (e.g., SELECT (SELECT count(*) FROM information_schema.tables WHERE table_schema='public') as tables, (SELECT count(*) FROM information_schema.columns WHERE table_schema='public') as columns).
     No explanations, no markdown, just raw SQL.
+    
+    IMPORTANT: When counting total rows in the database, do NOT use pg_class estimates (like reltuples) as they can be 0 even if data exists. 
+    Instead, use accurate methods or query the tables directly if possible.
     """
     
     response = llm.invoke(prompt)

@@ -12,3 +12,5 @@ streamlit
 requests
 google-generativeai
 langchain-openai
+langchain-groq
+langchain-ollama
