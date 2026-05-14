@@ -6,6 +6,13 @@ import sys
 from pathlib import Path
 from dotenv import load_dotenv
 from models import QueryRequest, ConnectionRequest, DatabaseConnection
+from typing import List, Optional
+
+class SuggestionRequest(BaseModel):
+    history: List[dict] = []
+    connection_id: Optional[str] = None
+    provider: str = "gemini"
+    model: str = "gemini-1.5-pro"
 
 load_dotenv()
 
@@ -217,6 +224,57 @@ async def ask_question(request: QueryRequest):
         import traceback
         print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+
+@app.post("/suggest")
+async def suggest_questions(request: SuggestionRequest):
+    global db_manager
+    current_db_manager = db_manager
+    if request.connection_id:
+        conn = connection_manager.get_connection(request.connection_id)
+        if conn:
+            from database import DatabaseManager
+            db_url = connection_manager.format_sqlalchemy_url(conn)
+            current_db_manager = DatabaseManager(db_url)
+    
+    if not current_db_manager or not sql_agent:
+        return [] # Silent fail for suggestions
+    
+    try:
+        schema = current_db_manager.get_schema()
+        # Format history for the prompt
+        history_text = ""
+        for msg in request.history[-5:]: # Last 5 messages for context
+            role = "User" if msg.get("role") == "user" else "Assistant"
+            content = msg.get("content", "")
+            history_text += f"{role}: {content}\n"
+            
+        suggestions = sql_agent.generate_suggestions(
+            history_text, 
+            schema,
+            provider=request.provider,
+            model_name=request.model
+        )
+        return suggestions
+    except Exception as e:
+        print(f"Suggestion generation error: {e}")
+        return []
+
+@app.post("/summarize")
+async def summarize_chat(request: dict):
+    question = request.get("question")
+    response_text = request.get("response")
+    provider = request.get("provider", "gemini")
+    model = request.get("model", "gemini-1.5-pro")
+    
+    if not question or not response_text or not sql_agent:
+        return {"title": "New Chat"}
+    
+    try:
+        title = sql_agent.summarize_conversation(question, response_text, provider, model)
+        return {"title": title}
+    except Exception as e:
+        print(f"Summarization error: {e}")
+        return {"title": question[:30] + "..." if len(question) > 30 else question}
 
 @app.get("/health")
 async def health_check():

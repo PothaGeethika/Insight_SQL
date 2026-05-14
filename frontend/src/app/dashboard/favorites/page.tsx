@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 export default function FavoritesPage() {
   const [favoriteSessions, setFavoriteSessions] = useState<any[]>([]);
   const [favoriteDbs, setFavoriteDbs] = useState<any[]>([]);
+  const [favoriteQueries, setFavoriteQueries] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -34,13 +35,18 @@ export default function FavoritesPage() {
           console.error("Error loading favorite databases", e);
         }
       }
+      // Load individual favorite queries
+      const queries = localStorage.getItem("favorite_queries");
+      if (queries) {
+        setFavoriteQueries(JSON.parse(queries));
+      }
       setLoading(false);
     };
 
     loadFavorites();
   }, []);
 
-  const hasFavorites = favoriteSessions.length > 0 || favoriteDbs.length > 0;
+  const hasFavorites = favoriteSessions.length > 0 || favoriteDbs.length > 0 || favoriteQueries.length > 0;
 
   if (loading) return <div className="p-8 text-center">Loading favorites...</div>;
 
@@ -97,7 +103,7 @@ export default function FavoritesPage() {
             </section>
           )}
 
-          {favoriteDbs.length > 0 && (
+           {favoriteDbs.length > 0 && (
             <section className="space-y-4">
               <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-2">
                 <Database className="h-4 w-4" />
@@ -124,6 +130,48 @@ export default function FavoritesPage() {
                           Query <ArrowRight className="h-3 w-3" />
                         </Button>
                       </Link>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {favoriteQueries.length > 0 && (
+            <section className="space-y-4">
+              <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-2">
+                <Star className="h-4 w-4" />
+                Favorite Queries
+              </h2>
+              <div className="grid grid-cols-1 gap-4">
+                {favoriteQueries.map((q) => (
+                  <Card key={q.id} className="hover:shadow-md transition-all border-l-4 border-l-amber-500 overflow-hidden">
+                    <CardContent className="p-0">
+                      <div className="p-4 bg-muted/30">
+                        <div className="flex items-start justify-between gap-4">
+                          <div className="flex-1 space-y-1">
+                            <p className="text-sm font-semibold text-foreground leading-relaxed">
+                              {q.question}
+                            </p>
+                            <p className="text-[10px] text-muted-foreground">
+                              {q.timestamp}
+                            </p>
+                          </div>
+                          <Link href="/dashboard/chat" onClick={() => q.sessionId && localStorage.setItem("current_session_id", q.sessionId)}>
+                             <Button variant="ghost" size="icon" className="h-8 w-8 hover:text-amber-500">
+                               <ArrowRight className="h-4 w-4" />
+                             </Button>
+                          </Link>
+                        </div>
+                      </div>
+                      <div className="p-4 border-t border-dashed bg-background">
+                         <div className="flex items-center gap-2 mb-2">
+                           <Badge variant="secondary" className="text-[9px] uppercase tracking-wider">Response</Badge>
+                         </div>
+                         <p className="text-sm text-muted-foreground line-clamp-3 italic">
+                           "{q.answer}"
+                         </p>
+                      </div>
                     </CardContent>
                   </Card>
                 ))}

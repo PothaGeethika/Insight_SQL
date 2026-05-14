@@ -75,3 +75,61 @@ class SQLAgent:
         })
         # Clean up any potential markdown formatting
         return sql.strip().replace("```sql", "").replace("```", "")
+
+    def generate_suggestions(self, history_text, schema, provider="gemini", model_name=None):
+        """Generates relevant follow-up questions based on history and schema."""
+        prompt = ChatPromptTemplate.from_template("""
+        You are a data analyst assistant. Based on the previous conversation history and the database schema provided, suggest 3-4 concise, highly relevant natural language questions the user might want to ask next.
+        
+        Schema:
+        {schema}
+        
+        Recent History:
+        {history}
+        
+        Rules:
+        1. Return ONLY the questions, one per line.
+        2. Do not include numbering, bullets, or any introductory text.
+        3. Each suggestion must be a direct question in plain English.
+        4. Focus on deep-diving into the data already discussed.
+        """)
+        llm = self.get_llm(provider, model_name)
+        chain = prompt | llm | self.parser
+        
+        response = chain.invoke({
+            "history": history_text,
+            "schema": schema
+        })
+        
+        # Split by newline and clean up
+        suggestions = [q.strip() for q in response.split("\n") if q.strip()]
+        # Remove common prefixes like "- ", "1. ", etc if they exist
+        cleaned = []
+        for s in suggestions:
+            s = s.lstrip("- ").lstrip("1. ").lstrip("2. ").lstrip("3. ").lstrip("4. ").strip()
+            if s: cleaned.append(s)
+            
+        return cleaned[:4]
+
+    def summarize_conversation(self, question, response_text, provider="gemini", model_name=None):
+        """Generates a short, 3-5 word title for a conversation."""
+        prompt = ChatPromptTemplate.from_template("""
+        You are a helpful assistant. Summarize the following user question and your response into a concise, professional title of 3-5 words.
+        
+        Question: {question}
+        Response: {response}
+        
+        Rules:
+        1. Return ONLY the title.
+        2. No punctuation at the end.
+        3. Do not use quotes.
+        4. Focus on the core subject of the data inquiry.
+        """)
+        llm = self.get_llm(provider, model_name)
+        chain = prompt | llm | self.parser
+        
+        title = chain.invoke({
+            "question": question,
+            "response": response_text
+        })
+        return title.strip().strip('"').strip("'")
