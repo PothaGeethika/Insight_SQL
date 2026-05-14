@@ -13,7 +13,18 @@ import {
   Plus,
   Sparkles,
   ArrowRight,
+  MoreVertical,
+  Star,
+  Trash2,
+  PanelLeftOpen,
+  ChevronLeft,
 } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
@@ -43,64 +54,177 @@ interface Message {
   };
 }
 
-const initialMessages: Message[] = [
-  {
-    id: "1",
-    role: "user",
-    content: "Show me the top 10 customers by total revenue for this month.",
-    timestamp: "10:43 AM",
-  },
-  {
-    id: "2",
-    role: "assistant",
-    content: "Here are the top 10 customers by total revenue for this month.",
-    timestamp: "10:43 AM",
-    sql: `SELECT
-  c.id,
-  c.name,
-  SUM(o.total_amount) AS total_revenue
-FROM orders o
-JOIN customers c ON c.id = o.customer_id
-WHERE DATE_TRUNC('month', o.created_at) = DATE_TRUNC('month',
-  CURRENT_DATE)
-GROUP BY c.id, c.name
-ORDER BY total_revenue DESC
-LIMIT 10;`,
-    tableData: {
-      headers: ["#", "Customer", "Revenue"],
-      rows: [
-        ["1", "Acme Corp", "$42,850"],
-        ["2", "TechVista Inc", "$38,920"],
-        ["3", "GlobalDyne", "$35,100"],
-        ["4", "NovaStar Labs", "$28,750"],
-        ["5", "Pinnacle Group", "$24,300"],
-      ],
-    },
-  },
-];
+const initialMessages: Message[] = [];
 
-const suggestedQueries = [
-  "Top products by sales",
-  "Users who signed up last week",
-  "Revenue trend by month",
-];
+const dbSuggestions: Record<string, string[]> = {
+  default: [
+    "List all tables in the database",
+    "Show the schema of the most active table",
+    "How many records were added today?",
+  ],
+  postgresql: [
+    "Show all active connections",
+    "List the top 10 largest tables",
+    "Show recent database locks",
+  ],
+  mysql: [
+    "Show current process list",
+    "List database indexes",
+    "Show table status and sizes",
+  ],
+  demo: [
+    "Top products by sales",
+    "Users who signed up last week",
+    "Revenue trend by month",
+    "Total inventory value",
+  ]
+};
 
-const chatHistory = [
-  { id: "1", title: "How many orders did we rec...", active: false },
-  { id: "2", title: "Top 5 customers by revenue", active: false },
-  { id: "3", title: "Monthly sales trend", active: false },
-  { id: "4", title: "Products with low stock", active: false },
-  { id: "5", title: "Active users this month", active: false },
-];
+const chatHistory: { id: string; title: string; active: boolean }[] = [];
 
 export default function ChatPage() {
-  const [messages, setMessages] = useState<Message[]>(initialMessages);
+  const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   const [showSQL, setShowSQL] = useState(true);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const [provider, setProvider] = useState<string>("gemini");
+  const [model, setModel] = useState<string>("gemini-1.5-pro");
+  const [databases, setDatabases] = useState<any[]>([]);
+  const [selectedDb, setSelectedDb] = useState<string>("");
+  const [history, setHistory] = useState<{ id: string; title: string; active: boolean; messages: Message[]; isFavorite?: boolean }[]>([]);
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  const [isHistoryOpen, setIsHistoryOpen] = useState(true);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const getSuggestions = () => {
+    const db = databases.find(d => d.id === selectedDb);
+    if (!db) return dbSuggestions.default;
+    return dbSuggestions[db.name.toLowerCase()] || dbSuggestions[db.type] || dbSuggestions.default;
+  };
+
+  const handleAttachFile = () => {
+    fileInputRef.current?.click();
+  };
+
+  const onFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const msg: Message = {
+        id: Date.now().toString(),
+        role: "user",
+        content: `Attached file: ${file.name}`,
+        timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+      };
+      setMessages(prev => [...prev, msg]);
+    }
+  };
+
+  const handleGenerate = () => {
+    const suggestions = getSuggestions();
+    const random = suggestions[Math.floor(Math.random() * suggestions.length)];
+    setInput(random);
+  };
+
+  // Load from localStorage on mount
+  useEffect(() => {
+    const savedHistory = localStorage.getItem("chat_sessions");
+    const savedCurrentId = localStorage.getItem("current_session_id");
+    
+    if (savedHistory) {
+      try {
+        const parsedHistory = JSON.parse(savedHistory);
+        setHistory(parsedHistory);
+        
+        if (savedCurrentId) {
+          setCurrentSessionId(savedCurrentId);
+          const currentSession = parsedHistory.find((s: any) => s.id === savedCurrentId);
+          if (currentSession) {
+            setMessages(currentSession.messages || []);
+          }
+        }
+      } catch (e) {
+        console.error("Error parsing saved history", e);
+      }
+    }
+  }, []);
+
+  // Save to localStorage whenever history or currentSessionId changes
+  useEffect(() => {
+    if (history.length > 0) {
+      localStorage.setItem("chat_sessions", JSON.stringify(history));
+    }
+  }, [history]);
+
+  useEffect(() => {
+    if (currentSessionId) {
+      localStorage.setItem("current_session_id", currentSessionId);
+    } else {
+      localStorage.removeItem("current_session_id");
+    }
+  }, [currentSessionId]);
+
+  const handleNewChat = () => {
+    setMessages([]);
+    setCurrentSessionId(null);
+    setInput("");
+    setHistory(prev => prev.map(h => ({ ...h, active: false })));
+  };
+
+  const loadSession = (sessionId: string) => {
+    const session = history.find(s => s.id === sessionId);
+    if (session) {
+      setMessages(session.messages || []);
+      setCurrentSessionId(sessionId);
+      setHistory(prev => prev.map(h => ({
+        ...h,
+        active: h.id === sessionId
+      })));
+    }
+  };
+
+  const deleteSession = (e: React.MouseEvent, sessionId: string) => {
+    e.stopPropagation();
+    const newHistory = history.filter(h => h.id !== sessionId);
+    setHistory(newHistory);
+    if (currentSessionId === sessionId) {
+      setMessages([]);
+      setCurrentSessionId(null);
+    }
+  };
+
+  const toggleFavoriteSession = (e: React.MouseEvent, sessionId: string) => {
+    e.stopPropagation();
+    const newHistory = history.map(h => 
+      h.id === sessionId ? { ...h, isFavorite: !h.isFavorite } : h
+    );
+    setHistory(newHistory);
+  };
+
+  const fetchDatabases = async () => {
+    try {
+      const response = await fetch("http://localhost:8000/databases");
+      const data = await response.json();
+      if (Array.isArray(data)) {
+        setDatabases(data);
+        if (data.length > 0) {
+          const defaultDb = data.find((db: any) => db.is_default) || data[0];
+          setSelectedDb(defaultDb.id);
+        }
+      } else {
+        setDatabases([]);
+      }
+    } catch (error) {
+      console.error("Error fetching databases:", error);
+    }
+  };
+
+  useEffect(() => {
+    fetchDatabases();
+  }, []);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -110,7 +234,7 @@ export default function ChatPage() {
     scrollToBottom();
   }, [messages]);
 
-  const handleSend = () => {
+  const handleSend = async () => {
     if (!input.trim()) return;
 
     const userMsg: Message = {
@@ -120,22 +244,98 @@ export default function ChatPage() {
       timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
     };
 
-    setMessages((prev) => [...prev, userMsg]);
+    const newMessages = [...messages, userMsg];
+    setMessages(newMessages);
     setInput("");
-    setIsTyping(true);
 
-    // Simulate AI response
-    setTimeout(() => {
-      const aiMsg: Message = {
+    // Update history/sessions
+    let updatedSessionId = currentSessionId;
+    if (!currentSessionId) {
+      updatedSessionId = userMsg.id;
+      setCurrentSessionId(updatedSessionId);
+      setHistory(prev => [
+        { 
+          id: updatedSessionId!, 
+          title: input.substring(0, 30) + (input.length > 30 ? "..." : ""), 
+          active: true,
+          messages: newMessages
+        },
+        ...prev.map(h => ({ ...h, active: false }))
+      ]);
+    } else {
+      setHistory(prev => prev.map(h => 
+        h.id === currentSessionId 
+          ? { ...h, messages: newMessages } 
+          : h
+      ));
+    }
+    if (!selectedDb) {
+      const warningMsg: Message = {
         id: (Date.now() + 1).toString(),
         role: "assistant",
-        content: `Based on your query, I found the relevant data. Here's a summary of the results from your connected PostgreSQL database.`,
-        sql: `SELECT * FROM analytics\nWHERE created_at >= NOW() - INTERVAL '7 days'\nORDER BY created_at DESC\nLIMIT 20;`,
+        content: "Please select a database from the header before asking a question.",
         timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
       };
-      setMessages((prev) => [...prev, aiMsg]);
+      setMessages((prev) => [...prev, warningMsg]);
       setIsTyping(false);
-    }, 2000);
+      return;
+    }
+
+    if (!provider) {
+      const warningMsg: Message = {
+        id: (Date.now() + 2).toString(),
+        role: "assistant",
+        content: "Please select an AI Provider (e.g. Gemini) from the header before asking a question.",
+        timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+      };
+      setMessages((prev) => [...prev, warningMsg]);
+      setIsTyping(false);
+      return;
+    }
+    setIsTyping(true);
+
+    // Call real backend
+    try {
+      const response = await fetch("http://localhost:8000/ask", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ 
+          question: input,
+          provider: provider,
+          connection_id: selectedDb
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.detail || "Failed to get response from backend");
+      }
+
+      setMessages((prev) => {
+        const updated = [...prev, data];
+        // Sync with history
+        setHistory(hPrev => hPrev.map(h => 
+          h.id === updatedSessionId 
+            ? { ...h, messages: updated } 
+            : h
+        ));
+        return updated;
+      });
+    } catch (error) {
+      console.error("Error:", error);
+      const errorMsg: Message = {
+        id: (Date.now() + 1).toString(),
+        role: "assistant",
+        content: `Error: ${error instanceof Error ? error.message : "Could not connect to backend. Make sure it's running."}`,
+        timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+      };
+      setMessages((prev) => [...prev, errorMsg]);
+    } finally {
+      setIsTyping(false);
+    }
   };
 
   const handleCopy = (text: string, id: string) => {
@@ -152,53 +352,150 @@ export default function ChatPage() {
   };
 
   return (
-    <div className="h-full flex">
+    <div className="h-full flex overflow-hidden">
       {/* Chat History Sidebar */}
-      <div className="hidden xl:flex w-64 border-r flex-col bg-muted/20">
-        <div className="p-4 flex items-center justify-between">
-          <h3 className="text-sm font-semibold">History</h3>
-          <Button variant="ghost" size="icon" className="h-7 w-7">
-            <Plus className="h-3.5 w-3.5" />
-          </Button>
-        </div>
+      <AnimatePresence mode="wait">
+        {isHistoryOpen && (
+          <motion.div 
+            initial={{ width: 0, opacity: 0 }}
+            animate={{ width: 256, opacity: 1 }}
+            exit={{ width: 0, opacity: 0 }}
+            transition={{ duration: 0.3, ease: "easeInOut" }}
+            className="hidden xl:flex w-64 border-r flex-col bg-muted/20 overflow-hidden"
+          >
+            <div className="p-4 flex items-center justify-between">
+              <h3 className="text-sm font-semibold">History</h3>
+              <div className="flex items-center gap-1">
+                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={handleNewChat}>
+                  <Plus className="h-3.5 w-3.5" />
+                </Button>
+                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setIsHistoryOpen(false)}>
+                  <ChevronLeft className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            </div>
         <Separator />
         <ScrollArea className="flex-1 p-2">
           <div className="space-y-0.5">
-            {chatHistory.map((chat) => (
-              <button
+            {history.map((chat) => (
+              <div
                 key={chat.id}
-                className="w-full text-left px-3 py-2.5 rounded-lg text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors truncate"
+                className="group relative"
               >
-                {chat.title}
-              </button>
+                <button
+                  onClick={() => loadSession(chat.id)}
+                  className={`w-full text-left px-3 py-2.5 pr-8 rounded-lg text-sm transition-colors truncate ${
+                    chat.active ? "bg-accent text-foreground font-medium" : "text-muted-foreground hover:text-foreground hover:bg-accent/50"
+                  }`}
+                >
+                  {chat.title}
+                </button>
+                <div className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <DropdownMenu>
+                    <DropdownMenuTrigger render={<Button variant="ghost" size="icon" className="h-7 w-7" />}>
+                      <MoreVertical className="h-3.5 w-3.5" />
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-40">
+                      <DropdownMenuItem onClick={(e) => toggleFavoriteSession(e, chat.id)}>
+                        <Star className={`h-4 w-4 mr-2 ${chat.isFavorite ? "fill-amber-500 text-amber-500" : ""}`} />
+                        {chat.isFavorite ? "Favorited" : "Favorite"}
+                      </DropdownMenuItem>
+                      <DropdownMenuItem 
+                        className="text-destructive"
+                        onClick={(e) => deleteSession(e, chat.id)}
+                      >
+                        <Trash2 className="h-4 w-4 mr-2" />
+                        Delete
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
+              </div>
             ))}
           </div>
           <button className="w-full text-left px-3 py-2 text-xs text-blue-600 dark:text-blue-400 hover:underline mt-2">
             View all chats →
           </button>
         </ScrollArea>
-      </div>
+      </motion.div>
+      )}
+    </AnimatePresence>
 
       {/* Main Chat Area */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* Chat Header */}
         <div className="h-14 border-b flex items-center justify-between px-6 flex-shrink-0">
           <div className="flex items-center gap-3">
+            {!isHistoryOpen && (
+              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setIsHistoryOpen(true)}>
+                <PanelLeftOpen className="h-4 w-4" />
+              </Button>
+            )}
             <h2 className="font-semibold text-sm">Chat</h2>
           </div>
           <div className="flex items-center gap-4">
             <div className="flex items-center gap-2 text-sm">
+              <Label htmlFor="provider-select" className="text-xs text-muted-foreground">
+                AI Provider:
+              </Label>
+              <Select value={provider} onValueChange={setProvider}>
+                <SelectTrigger className="h-8 w-32 text-xs">
+                  <SelectValue placeholder="Provider" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="gemini">✨ Gemini</SelectItem>
+                  <SelectItem value="openai">🤖 OpenAI</SelectItem>
+                  <SelectItem value="anthropic">🧠 Anthropic</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex items-center gap-2 text-sm">
+              <Select value={model} onValueChange={setModel}>
+                <SelectTrigger className="h-8 w-40 text-xs">
+                  <SelectValue placeholder="Model" />
+                </SelectTrigger>
+                <SelectContent>
+                  {provider === "gemini" && (
+                    <>
+                      <SelectItem value="gemini-1.5-pro">Gemini 1.5 Pro</SelectItem>
+                      <SelectItem value="gemini-1.5-flash">Gemini 1.5 Flash</SelectItem>
+                    </>
+                  )}
+                  {provider === "openai" && (
+                    <>
+                      <SelectItem value="gpt-4o">GPT-4o</SelectItem>
+                      <SelectItem value="gpt-4-turbo">GPT-4 Turbo</SelectItem>
+                    </>
+                  )}
+                  {provider === "anthropic" && (
+                    <>
+                      <SelectItem value="claude-3-5-sonnet">Claude 3.5 Sonnet</SelectItem>
+                      <SelectItem value="claude-3-opus">Claude 3 Opus</SelectItem>
+                    </>
+                  )}
+                </SelectContent>
+              </Select>
+            </div>
+            <Separator orientation="vertical" className="h-6" />
+            <div className="flex items-center gap-2 text-sm">
               <Label htmlFor="db-select" className="text-xs text-muted-foreground">
                 Database:
               </Label>
-              <Select defaultValue="postgres-prod">
+              <Select value={selectedDb} onValueChange={setSelectedDb}>
                 <SelectTrigger className="h-8 w-52 text-xs">
-                  <SelectValue />
+                  <SelectValue placeholder="Select Database">
+                    {databases.find(db => db.id === selectedDb)?.name || "Select Database"}
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="postgres-prod">🐘 PostgreSQL – Production</SelectItem>
-                  <SelectItem value="mysql-sales">🐬 MySQL – Sales</SelectItem>
-                  <SelectItem value="mongo-nosql">🍃 MongoDB – NoSQL</SelectItem>
+                  {databases.map((db) => (
+                    <SelectItem key={db.id} value={db.id}>
+                      {db.type === 'postgresql' ? '🐘' : db.type === 'mysql' ? '🐬' : '🪶'} {db.name}
+                    </SelectItem>
+                  ))}
+                  {databases.length === 0 && (
+                    <SelectItem value="none" disabled>No databases connected</SelectItem>
+                  )}
                 </SelectContent>
               </Select>
             </div>
@@ -224,6 +521,7 @@ export default function ChatPage() {
               {messages.map((msg) => (
                 <motion.div
                   key={msg.id}
+                  id={`msg-${msg.id}`}
                   initial={{ opacity: 0, y: 15 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ duration: 0.3 }}
@@ -363,7 +661,7 @@ export default function ChatPage() {
         {/* Suggested queries */}
         <div className="px-6 pb-2">
           <div className="max-w-3xl mx-auto flex items-center gap-2 flex-wrap">
-            {suggestedQueries.map((q) => (
+            {getSuggestions().map((q) => (
               <button
                 key={q}
                 onClick={() => setInput(q)}
@@ -380,10 +678,17 @@ export default function ChatPage() {
         <div className="p-4 border-t bg-background/80 backdrop-blur-sm">
           <div className="max-w-3xl mx-auto">
             <div className="relative flex items-end gap-2 bg-muted/30 rounded-xl border p-2 focus-within:ring-2 focus-within:ring-blue-500/30 focus-within:border-blue-300 dark:focus-within:border-blue-700 transition-all">
+              <input 
+                type="file" 
+                ref={fileInputRef} 
+                className="hidden" 
+                onChange={onFileChange}
+              />
               <Button
                 variant="ghost"
                 size="icon"
                 className="h-9 w-9 flex-shrink-0 text-muted-foreground hover:text-foreground"
+                onClick={handleAttachFile}
               >
                 <Paperclip className="h-4 w-4" />
               </Button>
@@ -401,6 +706,8 @@ export default function ChatPage() {
                   variant="ghost"
                   size="icon"
                   className="h-9 w-9 text-muted-foreground hover:text-foreground"
+                  onClick={handleGenerate}
+                  title="Generate/Optimize query"
                 >
                   <Sparkles className="h-4 w-4" />
                 </Button>

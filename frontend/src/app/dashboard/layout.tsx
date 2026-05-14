@@ -35,7 +35,6 @@ const mainNavItems = [
   { icon: MessageSquare, label: "Chat", href: "/dashboard/chat" },
   { icon: Database, label: "Databases", href: "/dashboard/databases" },
   { icon: BookmarkCheck, label: "Saved Queries", href: "/dashboard/saved" },
-  { icon: History, label: "History", href: "/dashboard/history" },
   { icon: Star, label: "Favorites", href: "/dashboard/favorites" },
   { icon: Settings, label: "Settings", href: "/dashboard/settings" },
 ];
@@ -162,7 +161,10 @@ export default function DashboardLayout({
         <div className="p-3 flex-shrink-0">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <button className={`flex items-center gap-3 w-full p-2 rounded-xl hover:bg-accent transition-colors ${collapsed ? "justify-center" : ""}`}>
+              <div 
+                role="button" 
+                className={`flex items-center gap-3 w-full p-2 rounded-xl hover:bg-accent transition-colors cursor-pointer ${collapsed ? "justify-center" : ""}`}
+              >
                 <Avatar className="h-9 w-9 flex-shrink-0">
                   <AvatarFallback className="bg-gradient-to-br from-blue-500 to-purple-600 text-white text-sm font-semibold">
                     JC
@@ -182,7 +184,7 @@ export default function DashboardLayout({
                   )}
                 </AnimatePresence>
                 {!collapsed && <ChevronsUpDown className="h-4 w-4 text-muted-foreground" />}
-              </button>
+              </div>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-56">
               <DropdownMenuItem><Settings className="mr-2 h-4 w-4" /> Settings</DropdownMenuItem>
