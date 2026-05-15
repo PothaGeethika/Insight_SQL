@@ -11,6 +11,7 @@ from typing import List, Optional
 class SuggestionRequest(BaseModel):
     history: List[dict] = []
     connection_id: Optional[str] = None
+    database: Optional[str] = None
     provider: str = "gemini"
     model: str = "gemini-1.5-pro"
 
@@ -39,29 +40,45 @@ connection_manager = None
 
 def init_components():
     global db_manager, sql_agent, connection_manager
+    
+    from agent import SQLAgent
+    from connection_manager import ConnectionManager
+    
+    # Initialize Connection Manager (Always needed)
     try:
-        from database import DatabaseManager
-        from agent import SQLAgent
-        from connection_manager import ConnectionManager
-        
         connection_manager = ConnectionManager()
+    except Exception as e:
+        print(f"Error initializing ConnectionManager: {e}")
+
+    # Initialize SQL Agent (Always needed)
+    try:
         sql_agent = SQLAgent()
-        
-        # Initialize default db_manager if a default connection exists
-        default_conn = connection_manager.get_default_connection()
+    except Exception as e:
+        print(f"Error initializing SQLAgent: {e}")
+    
+    # Initialize default db_manager if a default connection exists
+    try:
+        default_conn = connection_manager.get_default_connection() if connection_manager else None
         if default_conn:
-            db_url = connection_manager.format_sqlalchemy_url(default_conn)
-            db_manager = DatabaseManager(db_url)
+            db_url = connection_manager.format_connection_url(default_conn)
+            if default_conn.type == "mongodb":
+                from mongo_database import MongoDatabaseManager
+                db_manager = MongoDatabaseManager(db_url)
+            else:
+                from database import DatabaseManager
+                db_manager = DatabaseManager(db_url)
         else:
             # Fallback to .env if no connections saved yet
-            try:
-                db_url = os.getenv("DATABASE_URL")
-                if db_url:
+            db_url = os.getenv("DATABASE_URL")
+            if db_url:
+                if "mongodb" in db_url:
+                    from mongo_database import MongoDatabaseManager
+                    db_manager = MongoDatabaseManager(db_url)
+                else:
+                    from database import DatabaseManager
                     db_manager = DatabaseManager(db_url)
-            except:
-                pass
     except Exception as e:
-        print(f"Warning: Backend components not fully initialized: {e}")
+        print(f"Warning: Default database manager not initialized: {e}")
 
 init_components()
 
@@ -72,35 +89,34 @@ async def get_databases():
 @app.post("/databases/test")
 async def test_database_connection(request: ConnectionRequest):
     try:
-        from database import DatabaseManager
         from connection_manager import ConnectionManager
         cm = ConnectionManager()
         
         # Validate required fields for non-sqlite
-        if request.type != "sqlite" and (not request.host or not request.database):
+        if request.type not in ["sqlite", "mongodb"] and (not request.host or not request.database):
             return {"status": "error", "message": "Host and Database name are required for this database type."}
 
         # Create a temporary connection object
         dummy_conn = DatabaseConnection(**request.dict())
-        db_url = cm.format_sqlalchemy_url(dummy_conn)
+        db_url = cm.format_connection_url(dummy_conn)
         
-        # Try to connect
-        from sqlalchemy import create_engine, text
-        from sqlalchemy.exc import OperationalError, ProgrammingError
-        
-        engine = create_engine(db_url, connect_args={'connect_timeout': 5})
-        with engine.connect() as conn:
-            conn.execute(text("SELECT 1"))
-        return {"status": "success", "message": "Connection successful! Database is reachable."}
+        if request.type == "mongodb":
+            from pymongo import MongoClient
+            client = MongoClient(db_url, serverSelectionTimeoutMS=5000)
+            client.admin.command('ping')
+            return {"status": "success", "message": "Connection successful! MongoDB is reachable."}
+        else:
+            # SQL connection test
+            from sqlalchemy import create_engine, text
+            from sqlalchemy.exc import OperationalError, ProgrammingError
+            
+            engine = create_engine(db_url, connect_args={'connect_timeout': 5})
+            with engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+            return {"status": "success", "message": "Connection successful! Database is reachable."}
     
-    except OperationalError as e:
-        error_str = str(e.orig) if hasattr(e, 'orig') else str(e)
-        return {"status": "error", "message": f"Connection Failed: {error_str}"}
-    except ProgrammingError as e:
-        error_str = str(e.orig) if hasattr(e, 'orig') else str(e)
-        return {"status": "error", "message": f"Configuration Error: {error_str}"}
     except Exception as e:
-        return {"status": "error", "message": f"Unexpected Error: {str(e)}"}
+        return {"status": "error", "message": f"Connection Failed: {str(e)}"}
 
 @app.post("/databases")
 async def add_database(request: ConnectionRequest):
@@ -167,11 +183,23 @@ async def ask_question(request: QueryRequest):
     
     # 0. Set up database connection
     current_db_manager = db_manager
+    db_type = "postgresql" # Default type
+    conn = None
+    
     if request.connection_id:
         conn = connection_manager.get_connection(request.connection_id)
-        if conn:
+    elif request.database:
+        # Easy switch by name or type (e.g., "mongodb", "postgresql")
+        conn = connection_manager.find_connection_by_name_or_type(request.database)
+    
+    if conn:
+        db_type = conn.type
+        db_url = connection_manager.format_connection_url(conn)
+        if db_type == "mongodb":
+            from mongo_database import MongoDatabaseManager
+            current_db_manager = MongoDatabaseManager(db_url)
+        else:
             from database import DatabaseManager
-            db_url = connection_manager.format_sqlalchemy_url(conn)
             current_db_manager = DatabaseManager(db_url)
     
     if not current_db_manager or not sql_agent:
@@ -186,11 +214,12 @@ async def ask_question(request: QueryRequest):
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Database connection error: {str(e)}")
         
-        # 2. Generate SQL with selected provider
+        # 2. Generate Query (SQL or MQL)
         try:
-            sql_query = sql_agent.generate_sql(
+            generated_query = sql_agent.generate_query(
                 request.question, 
                 schema, 
+                db_type=db_type,
                 provider=request.provider,
                 model_name=request.model
             )
@@ -199,9 +228,10 @@ async def ask_question(request: QueryRequest):
         
         # 3. Execute Query
         try:
-            headers, rows = current_db_manager.execute_query(sql_query)
+            headers, rows = current_db_manager.execute_query(generated_query)
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"SQL execution error: {str(e)}\nGenerated SQL: {sql_query}")
+            error_label = "MQL" if db_type == "mongodb" else "SQL"
+            raise HTTPException(status_code=500, detail=f"{error_label} execution error: {str(e)}\nGenerated Query: {generated_query}")
         
         # 4. Format response
         from datetime import datetime
@@ -210,8 +240,9 @@ async def ask_question(request: QueryRequest):
         return {
             "id": os.urandom(8).hex(),
             "role": "assistant",
-            "content": f"I've generated and executed a query to answer your question: '{request.question}'",
-            "sql": sql_query,
+            "content": f"I've generated and executed a {db_type} query to answer your question: '{request.question}'",
+            "sql": generated_query if db_type != "mongodb" else None,
+            "mql": generated_query if db_type == "mongodb" else None,
             "timestamp": timestamp,
             "tableData": {
                 "headers": headers,
@@ -229,11 +260,19 @@ async def ask_question(request: QueryRequest):
 async def suggest_questions(request: SuggestionRequest):
     global db_manager
     current_db_manager = db_manager
+    conn = None
     if request.connection_id:
         conn = connection_manager.get_connection(request.connection_id)
-        if conn:
+    elif request.database:
+        conn = connection_manager.find_connection_by_name_or_type(request.database)
+
+    if conn:
+        db_url = connection_manager.format_connection_url(conn)
+        if conn.type == "mongodb":
+            from mongo_database import MongoDatabaseManager
+            current_db_manager = MongoDatabaseManager(db_url)
+        else:
             from database import DatabaseManager
-            db_url = connection_manager.format_sqlalchemy_url(conn)
             current_db_manager = DatabaseManager(db_url)
     
     if not current_db_manager or not sql_agent:

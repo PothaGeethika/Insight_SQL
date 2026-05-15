@@ -12,3 +12,4 @@ langchain-community
 pydantic
 langgraph
 pandas
+pymongo

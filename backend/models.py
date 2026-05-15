@@ -25,5 +25,6 @@ class ConnectionRequest(BaseModel):
 class QueryRequest(BaseModel):
     question: str
     provider: str = "gemini"
-    model: str = None
+    model: Optional[str] = None
     connection_id: Optional[str] = None
+    database: Optional[str] = None # New field for easy switching

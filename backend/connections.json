@@ -1,6 +1,6 @@
 [
     {
-        "name": "demo",
+        "name": "PostgreSQL Demo",
         "type": "postgresql",
         "host": "localhost",
         "port": 5432,
@@ -8,6 +8,15 @@
         "username": "postgres",
         "password": "Geethuhyma@2902",
         "id": "fd2fadc5-80ef-4f43-8704-712d6c4fee45",
+        "is_default": true
+    },
+    {
+        "name": "Local MongoDB",
+        "type": "mongodb",
+        "host": "localhost",
+        "port": 27017,
+        "database": "insightsql_db",
+        "id": "mongo-default-id",
         "is_default": false
     }
 ]
