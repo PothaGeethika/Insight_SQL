@@ -48,12 +48,24 @@ class ConnectionManager:
                 return DatabaseConnection(**c)
         return None
 
+    def find_connection_by_name_or_type(self, identifier: str) -> Optional[DatabaseConnection]:
+        connections = self._load()
+        # First try exact name match
+        for c in connections:
+            if c.get('name') == identifier:
+                return DatabaseConnection(**c)
+        # Then try type match
+        for c in connections:
+            if c.get('type') == identifier:
+                return DatabaseConnection(**c)
+        return None
+
     def delete_connection(self, conn_id: str):
         connections = self._load()
         connections = [c for c in connections if c['id'] != conn_id]
         self._save(connections)
 
-    def format_sqlalchemy_url(self, conn: DatabaseConnection) -> str:
+    def format_connection_url(self, conn: DatabaseConnection) -> str:
         import urllib.parse
         user = urllib.parse.quote_plus(conn.username) if conn.username else ""
         password = urllib.parse.quote_plus(conn.password) if conn.password else ""
@@ -64,5 +76,9 @@ class ConnectionManager:
             return f"postgresql://{user}:{password}@{conn.host}:{conn.port}/{conn.database}"
         elif conn.type == "mysql":
             return f"mysql+pymysql://{user}:{password}@{conn.host}:{conn.port}/{conn.database}"
+        elif conn.type == "mongodb":
+            if user and password:
+                return f"mongodb://{user}:{password}@{conn.host}:{conn.port}/{conn.database}?authSource=admin"
+            return f"mongodb://{conn.host}:{conn.port}/{conn.database}"
         else:
             raise ValueError(f"Unsupported database type: {conn.type}")
