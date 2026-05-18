@@ -1,13 +1,13 @@
 [
     {
-        "name": "demo",
+        "name": "sales_db",
         "type": "postgresql",
         "host": "localhost",
         "port": 5432,
-        "database": "insightsql_db",
+        "database": "insight_db",
         "username": "postgres",
-        "password": "Geethuhyma@2902",
+        "password": "postgres123",
         "id": "fd2fadc5-80ef-4f43-8704-712d6c4fee45",
-        "is_default": false
+        "is_default": true
     }
 ]

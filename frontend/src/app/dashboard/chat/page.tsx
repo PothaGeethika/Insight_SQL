@@ -43,6 +43,7 @@ import {
   DropdownMenuTrigger,
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
@@ -339,6 +340,7 @@ export default function ChatPage() {
         body: JSON.stringify({
           question: finalValue,
           provider: provider,
+          model: model,
           connection_id: selectedDb
         }),
       });
@@ -660,6 +662,7 @@ export default function ChatPage() {
         body: JSON.stringify({
           question: input,
           provider: provider,
+          model: model,
           connection_id: selectedDb
         }),
       });
@@ -813,7 +816,7 @@ export default function ChatPage() {
                             className="text-red-600 focus:text-red-600 focus:bg-red-50 dark:focus:bg-red-950/30"
                             onClick={(e) => {
                               e.stopPropagation();
-                              deleteSession(chat.id);
+                              deleteSession(e as unknown as React.MouseEvent, chat.id);
                             }}
                           >
                             <Trash2 className="mr-2 h-3.5 w-3.5" />

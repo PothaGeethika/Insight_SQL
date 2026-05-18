@@ -20,6 +20,7 @@ import {
   Search,
   Sun,
   Moon,
+  LayoutGrid,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -35,6 +36,7 @@ const mainNavItems: NavItem[] = [
   { name: "Home", href: "/dashboard", icon: Home },
   { name: "Chat", href: "/dashboard/chat", icon: MessageSquare },
   { name: "Databases", href: "/dashboard/databases", icon: Database },
+  { name: "Projects", href: "/dashboard/projects", icon: LayoutGrid },
   { name: "Saved Queries", href: "/dashboard/saved-queries", icon: Bookmark },
   { name: "Favorites", href: "/dashboard/favorites", icon: Star },
   { name: "Settings", href: "/dashboard/settings", icon: Settings },
