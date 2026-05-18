@@ -29,6 +29,31 @@ class SQLAgent:
         
         SQL Query:
         """)
+
+        self.mql_prompt = ChatPromptTemplate.from_template("""
+        You are an expert MongoDB developer. Given the database schema (collections and sample fields) below, convert the user's natural language question into a valid MongoDB Query (MQL) in JSON format.
+        
+        Schema:
+        {schema}
+        
+        Question: {question}
+        
+        Rules:
+        1. Return ONLY a JSON object representing the query.
+        2. The JSON must follow this structure:
+           {{
+               "collection": "name_of_collection",
+               "action": "find" or "aggregate" or "count",
+               "query": {{ ... }}, (for find or count)
+               "projection": {{ ... }}, (optional, for find)
+               "pipeline": [ ... ], (for aggregate)
+               "limit": 100
+           }}
+        3. Do not include any explanations or markdown blocks.
+        4. Ensure the query is optimized for performance.
+        
+        MQL JSON:
+        """)
         self.parser = StrOutputParser()
 
     def get_llm(self, provider, model_name=None):
@@ -50,8 +75,8 @@ class SQLAgent:
             api_key = os.getenv("DEEPSEEK_API_KEY")
             return ChatOpenAI(
                 model=model_name or "deepseek-chat",
-                openai_api_key=api_key,
-                openai_api_base="https://api.deepseek.com",
+                api_key=api_key,
+                base_url="https://api.deepseek.com/v1",
                 temperature=0
             )
         elif provider == "ollama":
@@ -64,17 +89,22 @@ class SQLAgent:
         else:
             raise ValueError(f"Unsupported provider: {provider}")
 
-    def generate_sql(self, question, schema, provider="gemini", model_name=None):
-        """Generates a SQL query using the selected LLM provider."""
+    def generate_query(self, question, schema, db_type="postgresql", provider="gemini", model_name=None):
+        """Generates either a SQL query or MQL JSON based on the database type."""
         llm = self.get_llm(provider, model_name)
-        chain = self.sql_prompt | llm | self.parser
         
-        sql = chain.invoke({
+        if db_type == "mongodb":
+            chain = self.mql_prompt | llm | self.parser
+        else:
+            chain = self.sql_prompt | llm | self.parser
+        
+        result = chain.invoke({
             "question": question,
             "schema": schema
         })
+        
         # Clean up any potential markdown formatting
-        return sql.strip().replace("```sql", "").replace("```", "")
+        return result.strip().replace("```sql", "").replace("```json", "").replace("```", "").strip()
 
     def generate_suggestions(self, history_text, schema, provider="gemini", model_name=None):
         """Generates relevant follow-up questions based on history and schema."""
