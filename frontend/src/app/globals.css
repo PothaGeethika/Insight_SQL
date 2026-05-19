@@ -358,3 +358,23 @@ html:not(.dark) [data-radix-popper-content-wrapper] > div {
   border-color: #e2e8f0 !important;
   color: #0f172a !important;
 }
+
+/* Custom highlight animations */
+@keyframes pulseHighlight {
+  0% {
+    background-color: rgba(99, 102, 241, 0.25);
+    box-shadow: 0 0 15px rgba(99, 102, 241, 0.4);
+  }
+  50% {
+    background-color: rgba(99, 102, 241, 0.1);
+    box-shadow: 0 0 5px rgba(99, 102, 241, 0.1);
+  }
+  100% {
+    background-color: transparent;
+    box-shadow: none;
+  }
+}
+
+.animate-pulse-highlight {
+  animation: pulseHighlight 2.5s ease-out forwards;
+}

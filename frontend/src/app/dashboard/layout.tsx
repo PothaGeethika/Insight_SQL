@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import * as React from "react";
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { motion } from "framer-motion";
@@ -50,6 +51,42 @@ export default function DashboardLayout({
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(true);
+  const [sidebarWidth, setSidebarWidth] = useState(280);
+  const [isResizing, setIsResizing] = useState(false);
+
+  const startResizing = (mouseDownEvent: React.MouseEvent) => {
+    mouseDownEvent.preventDefault();
+    setIsResizing(true);
+  };
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isResizing) return;
+      setSidebarWidth((prev) => {
+        const next = prev + e.movementX;
+        if (next < 140) {
+          setCollapsed(true);
+          return 80;
+        }
+        setCollapsed(false);
+        return next > 180 && next < 450 ? next : prev;
+      });
+    };
+
+    const handleMouseUp = () => {
+      setIsResizing(false);
+    };
+
+    if (isResizing) {
+      document.addEventListener("mousemove", handleMouseMove);
+      document.addEventListener("mouseup", handleMouseUp);
+    }
+
+    return () => {
+      document.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, [isResizing]);
 
   // Apply dark class to <html> so Tailwind dark: variants work globally
   useEffect(() => {
@@ -69,7 +106,7 @@ export default function DashboardLayout({
       {/* Sidebar */}
       <motion.aside
         initial={false}
-        animate={{ width: collapsed ? 80 : 280 }}
+        animate={{ width: collapsed ? 80 : sidebarWidth }}
         className="relative h-full flex flex-col z-30 bg-slate-50 dark:bg-[var(--surface-0)] border-r border-slate-200 dark:border-slate-900/40 transition-colors duration-300"
       >
         {/* Logo Header */}
@@ -96,23 +133,7 @@ export default function DashboardLayout({
           </Button>
         </div>
 
-        {/* Search & Actions */}
-        {!collapsed && (
-          <div className="px-6 mb-6 space-y-4">
-            <Button className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-black text-sm rounded-2xl h-12 shadow-lg shadow-indigo-600/20 gap-3 border-none uppercase tracking-widest">
-              <Plus className="h-5 w-5" />
-              New Chat
-            </Button>
 
-            <div className="relative group">
-              <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400 dark:text-slate-600 group-focus-within:text-indigo-500 transition-colors" />
-              <Input
-                placeholder="Search anything..."
-                className="bg-white dark:bg-[var(--surface-1)] border-slate-200 dark:border-slate-900 focus:border-indigo-500/50 h-11 pl-11 text-xs rounded-2xl placeholder:text-slate-400 dark:placeholder:text-slate-600 transition-colors"
-              />
-            </div>
-          </div>
-        )}
 
         {/* Navigation */}
         <div className="flex-1 px-4 py-2 space-y-1">
@@ -183,6 +204,13 @@ export default function DashboardLayout({
             {!collapsed && <ExternalLink className="h-3 w-3 ml-auto opacity-0 group-hover:opacity-100 transition-opacity" />}
           </Link>
         </div>
+        {/* Dynamic Drag Handle */}
+        <div
+          onMouseDown={startResizing}
+          className={`absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-indigo-500/60 z-50 transition-all ${
+            isResizing ? "bg-indigo-650 w-[3px] border-r-2 border-indigo-400" : "bg-transparent hover:w-1.5"
+          }`}
+        />
       </motion.aside>
 
       {/* Main Content Area */}

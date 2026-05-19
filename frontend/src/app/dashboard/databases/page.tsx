@@ -1,8 +1,9 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import { useState, useEffect } from "react";
+import * as React from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Plus, MoreHorizontal, X, ChevronDown, CheckCircle2, AlertCircle, Loader2 } from "lucide-react";
+import { Plus, MoreHorizontal, X, ChevronDown, CheckCircle2, AlertCircle, Loader2, Edit, Trash2, Link, Unlink, Star } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -12,6 +13,19 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 const DB_TYPES = [
   {
@@ -75,13 +89,35 @@ const DB_TYPES = [
 export default function DatabasesPage() {
   const [showAddForm, setShowAddForm] = useState(false);
   const [connections, setConnections] = useState<any[]>([]);
+  const [editingConnection, setEditingConnection] = useState<any | null>(null);
+  const [dbFavorites, setDbFavorites] = useState<string[]>([]);
   
   // Form State
   const [dbType, setDbType] = useState("postgresql");
   const [connectionString, setConnectionString] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [isTesting, setIsTesting] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
   const [testResult, setTestResult] = useState<{status: 'success' | 'error', message: string} | null>(null);
+
+  // Field Connection States
+  const [connectionMethod, setConnectionMethod] = useState<'string' | 'params'>('string');
+  const [host, setHost] = useState("");
+  const [port, setPort] = useState("");
+  const [database, setDatabase] = useState("");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+
+  const getDefaultPort = (type: string) => {
+    switch (type) {
+      case 'postgresql': return 5432;
+      case 'mysql': return 3306;
+      case 'mongodb': return 27017;
+      case 'vector': return 6333;
+      case 'graph': return 7687;
+      default: return 5432;
+    }
+  };
 
   const fetchConnections = async () => {
     try {
@@ -95,91 +131,260 @@ export default function DatabasesPage() {
     }
   };
 
+  const handleToggleFavoriteDb = (dbId: string) => {
+    const favs = JSON.parse(localStorage.getItem("db_favorites") || "[]");
+    let updated;
+    if (favs.includes(dbId)) {
+      updated = favs.filter((id: string) => id !== dbId);
+    } else {
+      updated = [...favs, dbId];
+    }
+    localStorage.setItem("db_favorites", JSON.stringify(updated));
+    setDbFavorites(updated);
+  };
+
   useEffect(() => {
     fetchConnections();
+    const favs = JSON.parse(localStorage.getItem("db_favorites") || "[]");
+    setDbFavorites(favs);
   }, []);
+
+  useEffect(() => {
+    setTestResult(null);
+  }, [dbType, connectionMethod, host, port, database, username, password, connectionString]);
 
   const parseConnectionString = (urlStr: string) => {
     try {
-      // Basic extraction using URL API
-      const url = new URL(urlStr);
-      let type = url.protocol.replace(':', '');
+      // 1. Extract protocol/prefix
+      const protocolMatch = urlStr.match(/^([^:]+):\/\/(.*)$/);
+      if (!protocolMatch) return null;
+      
+      let type = protocolMatch[1].toLowerCase();
       if (type === 'postgres') type = 'postgresql';
       
+      const rest = protocolMatch[2];
+      
+      let username = "";
+      let password = "";
+      let hostPortDb = rest;
+      
+      // 2. Extract credentials by finding the RIGHTMOST '@'
+      const lastAtIndex = rest.lastIndexOf('@');
+      if (lastAtIndex !== -1) {
+        const credentialsPart = rest.substring(0, lastAtIndex);
+        hostPortDb = rest.substring(lastAtIndex + 1);
+        
+        const firstColonIndex = credentialsPart.indexOf(':');
+        if (firstColonIndex !== -1) {
+          username = decodeURIComponent(credentialsPart.substring(0, firstColonIndex));
+          password = decodeURIComponent(credentialsPart.substring(firstColonIndex + 1));
+        } else {
+          username = decodeURIComponent(credentialsPart);
+        }
+      }
+      
+      // 3. Separate hostPort and database name
+      let hostPort = hostPortDb;
+      let database = "";
+      const firstSlashIndex = hostPortDb.indexOf('/');
+      if (firstSlashIndex !== -1) {
+        hostPort = hostPortDb.substring(0, firstSlashIndex);
+        database = hostPortDb.substring(firstSlashIndex + 1);
+      }
+      
+      // 4. Separate host and port
+      let host = hostPort;
+      let port = type === 'postgresql' ? 5432 : (type === 'mongodb' ? 27017 : 3306);
+      
+      const lastColonIndex = hostPort.lastIndexOf(':');
+      if (lastColonIndex !== -1) {
+        const portStr = hostPort.substring(lastColonIndex + 1);
+        // Ensure it is a valid port string, not part of a hostname or IPv6
+        if (/^\d+$/.test(portStr)) {
+          host = hostPort.substring(0, lastColonIndex);
+          port = parseInt(portStr);
+        }
+      }
+      
       return {
-        type: type,
-        host: url.hostname,
-        port: url.port ? parseInt(url.port) : (type === 'postgresql' ? 5432 : 3306),
-        database: url.pathname.replace('/', ''),
-        username: url.username,
-        password: url.password
+        type,
+        host,
+        port,
+        database,
+        username,
+        password
       };
     } catch (e) {
       return null;
     }
   };
 
-  const handleTestAndSave = async () => {
-    if (!connectionString) {
-      setTestResult({ status: 'error', message: "Connection string is required" });
-      return;
+  const startEdit = (conn: any) => {
+    setEditingConnection(conn);
+    setDbType(conn.type);
+    setDisplayName(conn.name);
+    setHost(conn.host || "");
+    setPort(conn.port ? String(conn.port) : "");
+    setDatabase(conn.database || "");
+    setUsername(conn.username || "");
+    setPassword(conn.password || "");
+    
+    // Format connection string from connection object
+    let connStr = "";
+    if (conn.type === "sqlite") {
+      connStr = `sqlite:///${conn.database}`;
+    } else {
+      const user = conn.username ? decodeURIComponent(conn.username) : "";
+      const pass = conn.password ? decodeURIComponent(conn.password) : "";
+      const auth = (user || pass) ? `${user}:${pass}@` : "";
+      const portStr = conn.port ? `:${conn.port}` : "";
+      connStr = `${conn.type}://${auth}${conn.host || ""}${portStr}/${conn.database || ""}`;
+    }
+    setConnectionString(connStr);
+    
+    if (conn.host || conn.username) {
+      setConnectionMethod("params");
+    } else {
+      setConnectionMethod("string");
     }
 
-    const parsed = parseConnectionString(connectionString);
-    if (!parsed) {
-      setTestResult({ status: 'error', message: "Invalid connection string format" });
+    setShowAddForm(true);
+    setTestResult(null);
+  };
+
+  const handleDelete = async (connId: string) => {
+    if (!confirm("Are you sure you want to delete this database connection?")) return;
+    try {
+      const res = await fetch(`http://localhost:8000/databases/${connId}`, {
+        method: "DELETE",
+      });
+      if (res.ok) {
+        fetchConnections();
+      }
+    } catch (e) {
+      console.error("Failed to delete connection", e);
+    }
+  };
+
+  const handleToggleConnect = async (conn: any) => {
+    try {
+      const res = await fetch(`http://localhost:8000/databases/${conn.id}/default`, {
+        method: "PUT",
+      });
+      if (res.ok) {
+        fetchConnections();
+      }
+    } catch (e) {
+      console.error("Failed to toggle connection state", e);
+    }
+  };
+
+  const getConnectionPayload = () => {
+    let payload: any = {};
+    if (connectionMethod === 'string') {
+      if (!connectionString) return null;
+      const parsed = parseConnectionString(connectionString);
+      if (!parsed) return null;
+      payload = {
+        name: displayName || `${parsed.type}_${parsed.database}`,
+        type: parsed.type,
+        host: parsed.host,
+        port: parsed.port,
+        database: parsed.database,
+        username: parsed.username,
+        password: parsed.password
+      };
+    } else {
+      if (!database) return null;
+      payload = {
+        name: displayName || `${dbType}_${database}`,
+        type: dbType,
+        host: host || "localhost",
+        port: port ? parseInt(port) : getDefaultPort(dbType),
+        database: database,
+        username: username,
+        password: password
+      };
+    }
+    return payload;
+  };
+
+  const handleTestConnection = async () => {
+    const payload = getConnectionPayload();
+    if (!payload) {
+      setTestResult({ status: 'error', message: "Please fill in all required fields first" });
       return;
     }
-
-    const payload = {
-      name: displayName || `${parsed.type}_${parsed.database}`,
-      type: parsed.type,
-      host: parsed.host,
-      port: parsed.port,
-      database: parsed.database,
-      username: parsed.username,
-      password: parsed.password
-    };
-
+    
     setIsTesting(true);
     setTestResult(null);
-
+    
     try {
-      // 1. Test Connection
-      const testRes = await fetch("http://localhost:8000/databases/test", {
+      const res = await fetch("http://localhost:8000/databases/test", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
       });
-      const testData = await testRes.json();
-
-      if (testData.status === 'success') {
-        // 2. Save if test passes
-        const saveRes = await fetch("http://localhost:8000/databases", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload)
-        });
-        
-        if (saveRes.ok) {
-          setTestResult({ status: 'success', message: "Successfully connected and saved!" });
-          fetchConnections();
-          setTimeout(() => {
-            setShowAddForm(false);
-            setConnectionString("");
-            setDisplayName("");
-            setTestResult(null);
-          }, 1500);
-        } else {
-          setTestResult({ status: 'error', message: "Tested OK, but failed to save." });
-        }
+      const data = await res.json();
+      if (data.status === 'success') {
+        setTestResult({ status: 'success', message: data.message || "Connection successful!" });
       } else {
-        setTestResult({ status: 'error', message: testData.message || "Connection failed." });
+        setTestResult({ status: 'error', message: data.message || "Connection failed." });
       }
-    } catch (e: any) {
+    } catch (e) {
       setTestResult({ status: 'error', message: "Failed to connect to backend server." });
     } finally {
       setIsTesting(false);
+    }
+  };
+
+  const handleSaveConnection = async () => {
+    const payload = getConnectionPayload();
+    if (!payload) return;
+    
+    setIsSaving(true);
+    
+    try {
+      const url = editingConnection 
+        ? `http://localhost:8000/databases/${editingConnection.id}`
+        : "http://localhost:8000/databases";
+      
+      const method = editingConnection ? "PUT" : "POST";
+      
+      const res = await fetch(url, {
+        method: method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      
+      if (res.ok) {
+        setTestResult({ 
+          status: 'success', 
+          message: editingConnection ? "Successfully updated connection!" : "Successfully connected and saved!" 
+        });
+        fetchConnections();
+        setTimeout(() => {
+          setShowAddForm(false);
+          setEditingConnection(null);
+          setConnectionString("");
+          setDisplayName("");
+          setHost("");
+          setPort("");
+          setDatabase("");
+          setUsername("");
+          setPassword("");
+          setTestResult(null);
+        }, 1500);
+      } else {
+        setTestResult({ 
+          status: 'error', 
+          message: editingConnection ? "Failed to update connection details." : "Failed to save connection details." 
+        });
+      }
+    } catch (e) {
+      setTestResult({ status: 'error', message: "Failed to connect to backend server." });
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -193,7 +398,7 @@ export default function DatabasesPage() {
 
   const itemVariants = {
     hidden: { opacity: 0, y: 20 },
-    show: { opacity: 1, y: 0, transition: { type: "spring", stiffness: 300, damping: 24 } },
+    show: { opacity: 1, y: 0, transition: { type: "spring" as const, stiffness: 300, damping: 24 } },
   };
 
   return (
@@ -209,6 +414,16 @@ export default function DatabasesPage() {
           </div>
           <Button 
             onClick={() => {
+              setEditingConnection(null);
+              setConnectionString("");
+              setDisplayName("");
+              setHost("");
+              setPort("");
+              setDatabase("");
+              setUsername("");
+              setPassword("");
+              setDbType("postgresql");
+              setConnectionMethod("string");
               setShowAddForm(true);
               setTestResult(null);
             }}
@@ -226,158 +441,425 @@ export default function DatabasesPage() {
           animate="show"
           className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"
         >
-          {DB_TYPES.map((db) => {
-            const isConnected = connections.some(c => c.type === db.id);
-            return (
-              <motion.div
-                key={db.id}
-                variants={itemVariants}
-                className="bg-[var(--surface-1)] border border-slate-800/50 hover:border-slate-700 rounded-2xl p-6 transition-all duration-300 flex flex-col h-full"
-              >
-                <div className="flex items-start justify-between mb-6">
-                  {db.icon}
-                  <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-500 hover:text-white hover:bg-slate-800 rounded-lg -mr-2 -mt-2">
-                    <MoreHorizontal className="h-4 w-4" />
+          {(() => {
+            const cardsToRender = connections.map(conn => ({
+              id: conn.id,
+              type: conn.type,
+              name: conn.name,
+              dbType: conn.type,
+              isPlaceholder: false,
+              isConnected: conn.is_default,
+              conn: conn
+            }));
+
+            if (cardsToRender.length === 0) {
+              return (
+                <div className="col-span-full flex flex-col items-center justify-center text-center py-20 px-4 border border-dashed border-slate-800 rounded-3xl bg-slate-900/10 max-w-xl mx-auto my-10">
+                  <div className="h-16 w-16 rounded-2xl bg-indigo-500/10 flex items-center justify-center text-indigo-400 mb-6 border border-indigo-500/25">
+                    <Plus className="h-8 w-8 animate-pulse" />
+                  </div>
+                  <h3 className="text-xl font-bold text-white mb-3">No Databases Connected</h3>
+                  <p className="text-sm text-slate-400 mb-6 leading-relaxed max-w-sm">
+                    Connect and manage all your data sources. Add your first database connection to get started with natural language queries!
+                  </p>
+                  <Button 
+                    onClick={() => {
+                      setDbType("postgresql");
+                      setEditingConnection(null);
+                      setConnectionString("");
+                      setDisplayName("");
+                      setHost("");
+                      setPort("");
+                      setDatabase("");
+                      setUsername("");
+                      setPassword("");
+                      setConnectionMethod("string");
+                      setTestResult(null);
+                      setShowAddForm(true);
+                    }}
+                    className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold h-11 px-8 rounded-xl shadow-lg shadow-indigo-600/20 cursor-pointer flex items-center gap-2 animate-bounce"
+                  >
+                    <Plus className="h-4 w-4" /> Add First Database
                   </Button>
                 </div>
-                
-                <div className="flex-1">
-                  <h3 className="text-lg font-bold text-white mb-2">{db.name}</h3>
-                  <p className="text-sm text-slate-400 leading-relaxed mb-6">
-                    {db.description}
+              );
+            }
+
+            return cardsToRender.map((card) => {
+              const dbInfo = DB_TYPES.find(d => d.id === card.dbType) || {
+                id: card.dbType,
+                name: card.dbType.toUpperCase(),
+                description: `Connect to a ${card.dbType} database.`,
+                icon: (
+                  <div className="h-10 w-10 rounded-xl bg-slate-500/10 flex items-center justify-center">
+                    <span className="text-xl">🔌</span>
+                  </div>
+                )
+              };
+
+               return (
+                <motion.div
+                  key={card.id}
+                  variants={itemVariants}
+                  className="bg-[var(--surface-1)] border border-slate-800/50 hover:border-slate-700 rounded-2xl p-6 transition-all duration-300 flex flex-col h-full"
+                >
+                  <div className="flex items-start justify-between mb-6">
+                    {dbInfo.icon}
+                    <DropdownMenu>
+                      <DropdownMenuTrigger className="h-8 w-8 inline-flex items-center justify-center text-slate-500 hover:text-white hover:bg-slate-800 rounded-lg -mr-2 -mt-2 border-0 bg-transparent cursor-pointer focus:outline-none focus:ring-2 focus:ring-indigo-500/50 transition-colors">
+                        <MoreHorizontal className="h-4 w-4" />
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className="w-48 bg-slate-900 border border-slate-800 text-slate-200 rounded-xl shadow-xl p-1">
+                        <DropdownMenuItem 
+                          onClick={() => handleToggleConnect(card.conn)}
+                          className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-slate-800 hover:text-white rounded-lg text-sm font-medium transition-colors"
+                        >
+                          {card.isConnected ? (
+                            <>
+                              <Unlink className="h-4 w-4 text-amber-500" />
+                              <span>Disconnect</span>
+                            </>
+                          ) : (
+                            <>
+                              <Link className="h-4 w-4 text-emerald-500" />
+                              <span>Connect</span>
+                            </>
+                          )}
+                        </DropdownMenuItem>
+                        
+                        <DropdownMenuItem 
+                          onClick={() => handleToggleFavoriteDb(card.id)}
+                          className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-slate-800 hover:text-white rounded-lg text-sm font-medium transition-colors"
+                        >
+                          <Star className={`h-4 w-4 ${dbFavorites.includes(card.id) ? 'text-amber-400 fill-amber-400' : 'text-slate-500'}`} />
+                          <span>{dbFavorites.includes(card.id) ? "Unfavorite" : "Favorite"}</span>
+                        </DropdownMenuItem>
+                        
+                        <DropdownMenuItem 
+                          onClick={() => startEdit(card.conn)}
+                          className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-slate-800 hover:text-white rounded-lg text-sm font-medium transition-colors"
+                        >
+                          <Edit className="h-4 w-4 text-blue-500" />
+                          <span>Edit</span>
+                        </DropdownMenuItem>
+                        
+                        <DropdownMenuItem 
+                          onClick={() => handleDelete(card.conn.id)}
+                          className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-red-500/10 hover:text-red-400 text-red-500 rounded-lg text-sm font-medium transition-colors"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                          <span>Delete</span>
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </div>
+                  
+                  <div className="flex-1">
+                    <h3 className="text-lg font-bold text-white mb-2 flex items-center gap-2">
+                      {card.name}
+                      {dbFavorites.includes(card.id) && (
+                        <Star className="h-4.5 w-4.5 text-amber-400 fill-amber-400 filter drop-shadow-[0_0_6px_rgba(251,191,36,0.35)] shrink-0 animate-pulse" />
+                      )}
+                    </h3>
+                    <p className="text-xs text-indigo-400 font-bold mb-2">Type: {dbInfo.name}</p>
+                    <p className="text-sm text-slate-400 leading-relaxed mb-6">
+                      {dbInfo.description}
+                    </p>
+                  </div>
+
+                  <div className="mt-auto flex items-center">
+                    <button
+                      type="button"
+                      onClick={() => handleToggleConnect(card.conn)}
+                      className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border transition-all duration-200 ${
+                        card.isConnected 
+                          ? 'bg-emerald-500/10 border-emerald-500/20 hover:bg-emerald-500/20 text-emerald-400 cursor-pointer shadow-md shadow-emerald-500/5'
+                          : 'bg-slate-800/50 border-slate-700/50 hover:bg-slate-700/50 text-slate-400 cursor-pointer'
+                      }`}
+                      title={card.isConnected ? "Click to Disconnect" : "Click to Connect"}
+                    >
+                      <div className={`h-2 w-2 rounded-full ${card.isConnected ? 'bg-emerald-500 animate-pulse' : 'bg-slate-500'}`} />
+                      <span className="text-xs font-bold">
+                        {card.isConnected ? 'Connected' : 'Not Connected'}
+                      </span>
+                    </button>
+                  </div>
+                </motion.div>
+              );
+            });
+          })()}
+        </motion.div>
+
+        {/* Add/Edit Database Centered Popup Modal */}
+        <AnimatePresence>
+          {showAddForm && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+              {/* Darkened Blurred Backdrop Overlay */}
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                onClick={() => {
+                  setShowAddForm(false);
+                  setEditingConnection(null);
+                  setConnectionString("");
+                  setDisplayName("");
+                  setHost("");
+                  setPort("");
+                  setDatabase("");
+                  setUsername("");
+                  setPassword("");
+                }}
+                className="absolute inset-0 bg-black/80 backdrop-blur-md"
+              />
+
+              {/* Centered Modal Popup Window */}
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95, y: 20 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: 20 }}
+                transition={{ type: "spring", duration: 0.3 }}
+                className="relative bg-[#0c0c14] border border-slate-800/80 w-full max-w-3xl rounded-2xl p-6 shadow-2xl z-10 flex flex-col max-h-[85vh] overflow-hidden text-white"
+              >
+                {/* Close X Button */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowAddForm(false);
+                    setEditingConnection(null);
+                    setConnectionString("");
+                    setDisplayName("");
+                    setHost("");
+                    setPort("");
+                    setDatabase("");
+                    setUsername("");
+                    setPassword("");
+                  }}
+                  className="absolute top-5 right-5 text-slate-400 hover:text-white transition-colors p-1 hover:bg-slate-800/50 rounded-lg cursor-pointer"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+
+                <div className="flex flex-col gap-2 mb-6">
+                  <h2 className="text-2xl font-black text-white">
+                    {editingConnection ? "Edit Database Connection" : "Add Database"}
+                  </h2>
+                  <p className="text-slate-400 font-medium">
+                    Provide credentials or a connection string to link your database.
                   </p>
                 </div>
 
-                <div className="mt-auto flex items-center">
-                  <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-800/50 border border-slate-700/50">
-                    <div className={`h-2 w-2 rounded-full ${isConnected ? 'bg-emerald-500' : 'bg-slate-500'}`} />
-                    <span className={`text-xs font-bold ${isConnected ? 'text-emerald-400' : 'text-slate-400'}`}>
-                      {isConnected ? 'Connected' : 'Not Connected'}
-                    </span>
+                <div className="space-y-6 overflow-y-auto pr-1 flex-1">
+                  {/* Type Select & Display Name in a 2-Column Grid */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {/* Database Type Select */}
+                    <div className="space-y-3">
+                      <label className="text-sm font-bold text-slate-300">Select Database Type</label>
+                      <Select value={dbType} onValueChange={setDbType}>
+                        <SelectTrigger className="w-full bg-[var(--surface-0)] border-slate-800 h-12 rounded-xl px-4 text-white hover:border-slate-700">
+                          <SelectValue placeholder="Select type" />
+                        </SelectTrigger>
+                        <SelectContent className="bg-[var(--surface-1)] border-slate-800 text-white">
+                          {DB_TYPES.map(db => (
+                            <SelectItem key={db.id} value={db.id} className="cursor-pointer hover:bg-slate-800">
+                              <div className="flex items-center gap-3 py-1">
+                                <span className="font-bold">{db.name}</span>
+                              </div>
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    {/* Project Name Input */}
+                    <div className="space-y-3">
+                      <label className="text-sm font-bold text-slate-300">Project Name</label>
+                      <Input 
+                        value={displayName}
+                        onChange={(e) => setDisplayName(e.target.value)}
+                        placeholder="e.g., Sales Analysis Project"
+                        className="bg-[var(--surface-0)] border-slate-800 focus:border-indigo-500 h-12 rounded-xl text-sm placeholder:text-slate-600 text-white"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Connection Details Section */}
+                  <div className="space-y-4 pt-4 border-t border-slate-800/50">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-sm font-bold text-white uppercase tracking-wider">Connection Details</h3>
+                      
+                      {/* Method Toggle Tab */}
+                      <div className="flex gap-1 p-0.5 bg-slate-900 border border-slate-800 rounded-lg">
+                        <button
+                          type="button"
+                          onClick={() => setConnectionMethod('string')}
+                          className={`px-3 py-1.5 text-xs font-bold rounded-md transition-all cursor-pointer ${
+                            connectionMethod === 'string' 
+                              ? 'bg-indigo-600 text-white shadow shadow-indigo-600/10' 
+                              : 'text-slate-400 hover:text-white'
+                          }`}
+                        >
+                          URI String
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setConnectionMethod('params')}
+                          className={`px-3 py-1.5 text-xs font-bold rounded-md transition-all cursor-pointer ${
+                            connectionMethod === 'params' 
+                              ? 'bg-indigo-600 text-white shadow shadow-indigo-600/10' 
+                              : 'text-slate-400 hover:text-white'
+                          }`}
+                        >
+                          Form Parameters
+                        </button>
+                      </div>
+                    </div>
+
+                    {connectionMethod === 'params' ? (
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        {/* Host */}
+                        <div className="col-span-2 space-y-2">
+                          <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">Host</label>
+                          <Input 
+                            value={host}
+                            onChange={(e) => setHost(e.target.value)}
+                            placeholder="localhost"
+                            className="bg-[var(--surface-0)] border-slate-800 focus:border-indigo-500 h-11 rounded-xl text-sm text-white"
+                          />
+                        </div>
+                        {/* Port */}
+                        <div className="space-y-2">
+                          <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">Port</label>
+                          <Input 
+                            value={port}
+                            onChange={(e) => setPort(e.target.value)}
+                            placeholder={String(getDefaultPort(dbType))}
+                            className="bg-[var(--surface-0)] border-slate-800 focus:border-indigo-500 h-11 rounded-xl text-sm text-white"
+                          />
+                        </div>
+
+                        {/* Database Name */}
+                        <div className="space-y-2">
+                          <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">Database Name</label>
+                          <Input 
+                            value={database}
+                            onChange={(e) => setDatabase(e.target.value)}
+                            placeholder="e.g., main_db"
+                            className="bg-[var(--surface-0)] border-slate-800 focus:border-indigo-500 h-11 rounded-xl text-sm text-white"
+                          />
+                        </div>
+                        {/* Username */}
+                        <div className="space-y-2">
+                          <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">Username</label>
+                          <Input 
+                            value={username}
+                            onChange={(e) => setUsername(e.target.value)}
+                            placeholder="postgres"
+                            className="bg-[var(--surface-0)] border-slate-800 focus:border-indigo-500 h-11 rounded-xl text-sm text-white"
+                          />
+                        </div>
+                        {/* Password */}
+                        <div className="space-y-2">
+                          <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">Password</label>
+                          <Input 
+                            type="password"
+                            value={password}
+                            onChange={(e) => setPassword(e.target.value)}
+                            placeholder="••••••••"
+                            className="bg-[var(--surface-0)] border-slate-800 focus:border-indigo-500 h-11 rounded-xl text-sm text-white"
+                          />
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">Connection String (URI)</label>
+                          <span className="text-[10px] font-bold text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded uppercase tracking-wider">Required</span>
+                        </div>
+                        <Input 
+                          value={connectionString}
+                          onChange={(e) => setConnectionString(e.target.value)}
+                          placeholder={`${dbType}://username:password@host:port/database`}
+                          className="bg-[var(--surface-0)] border-slate-800 focus:border-indigo-500 h-12 rounded-xl text-sm placeholder:text-slate-600 font-mono text-white"
+                        />
+                        <p className="text-xs text-slate-500 font-medium">Provide a valid {dbType} connection string.</p>
+                      </div>
+                    )}
+
+                    {testResult && (
+                      <motion.div 
+                        initial={{ opacity: 0, scale: 0.95 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        className={`p-4 rounded-xl flex items-start gap-3 border ${
+                          testResult.status === 'success' 
+                            ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
+                            : 'bg-rose-500/10 border-rose-500/20 text-rose-400'
+                        }`}
+                      >
+                        {testResult.status === 'success' ? <CheckCircle2 className="h-5 w-5 mt-0.5 shrink-0" /> : <AlertCircle className="h-5 w-5 mt-0.5 shrink-0" />}
+                        <p className="text-sm font-medium">{testResult.message}</p>
+                      </motion.div>
+                    )}
+                  </div>
+
+                  {/* Action Buttons */}
+                  <div className="flex items-center justify-between pt-6 mt-4 border-t border-slate-800/50">
+                    <Button 
+                      variant="ghost" 
+                      onClick={() => {
+                        setShowAddForm(false);
+                        setEditingConnection(null);
+                        setConnectionString("");
+                        setDisplayName("");
+                        setHost("");
+                        setPort("");
+                        setDatabase("");
+                        setUsername("");
+                        setPassword("");
+                        setTestResult(null);
+                      }}
+                      className="text-slate-400 hover:text-white hover:bg-slate-800 h-11 px-6 rounded-xl font-bold cursor-pointer"
+                    >
+                      Cancel
+                    </Button>
+
+                    <div className="flex items-center gap-3">
+                      {/* Test Connection Button */}
+                      <Button 
+                        onClick={handleTestConnection}
+                        disabled={isTesting || isSaving || (connectionMethod === 'string' ? !connectionString : !database)}
+                        className="bg-slate-900 border border-slate-800 hover:bg-slate-800 text-white font-bold h-11 px-6 rounded-xl cursor-pointer disabled:opacity-50"
+                      >
+                        {isTesting ? (
+                          <>
+                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                            Testing...
+                          </>
+                        ) : (
+                          "Test Connection"
+                        )}
+                      </Button>
+
+                      {/* Save & Connect Button (Only clickable if Test is successful) */}
+                      <Button 
+                        onClick={handleSaveConnection}
+                        disabled={isSaving || isTesting || !testResult || testResult.status !== 'success'}
+                        className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold h-11 px-6 rounded-xl shadow-lg shadow-indigo-600/20 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer transition-all duration-200"
+                      >
+                        {isSaving ? (
+                          <>
+                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                            Saving...
+                          </>
+                        ) : (
+                          editingConnection ? "Update Connection" : "Save & Connect"
+                        )}
+                      </Button>
+                    </div>
                   </div>
                 </div>
               </motion.div>
-            );
-          })}
-        </motion.div>
-
-        {/* Add Database Form (Bottom Panel) */}
-        <AnimatePresence>
-          {showAddForm && (
-            <motion.div
-              initial={{ opacity: 0, y: 20, height: 0 }}
-              animate={{ opacity: 1, y: 0, height: 'auto' }}
-              exit={{ opacity: 0, y: 20, height: 0 }}
-              className="mt-8 bg-[var(--surface-1)] border border-slate-800/50 rounded-2xl p-6 relative overflow-hidden"
-            >
-              <div className="flex items-center justify-between mb-8">
-                <h2 className="text-xl font-bold text-white">Add Database</h2>
-                <Button 
-                  variant="ghost" 
-                  size="icon" 
-                  onClick={() => setShowAddForm(false)}
-                  className="h-8 w-8 text-slate-500 hover:text-white hover:bg-slate-800 rounded-lg absolute top-6 right-6"
-                >
-                  <X className="h-4 w-4" />
-                </Button>
-              </div>
-
-              <div className="space-y-6 max-w-3xl">
-                {/* Database Type Select */}
-                <div className="space-y-3">
-                  <label className="text-sm font-bold text-slate-300">Select Database Type</label>
-                  <Select value={dbType} onValueChange={setDbType}>
-                    <SelectTrigger className="w-full bg-[var(--surface-0)] border-slate-800 h-14 rounded-xl px-4 text-white hover:border-slate-700">
-                      <SelectValue placeholder="Select type" />
-                    </SelectTrigger>
-                    <SelectContent className="bg-[var(--surface-1)] border-slate-800 text-white">
-                      {DB_TYPES.map(db => (
-                        <SelectItem key={db.id} value={db.id} className="cursor-pointer hover:bg-slate-800">
-                          <div className="flex items-center gap-3 py-1">
-                            {/* Render a tiny version of icon or just text */}
-                            <span className="font-bold">{db.name}</span>
-                          </div>
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                {/* Connection Details */}
-                <div className="space-y-4 pt-4 border-t border-slate-800/50">
-                  <h3 className="text-sm font-bold text-white">Connection Details</h3>
-                  
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between">
-                      <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">Connection String</label>
-                      <span className="text-[10px] font-bold text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded uppercase tracking-wider">Required</span>
-                    </div>
-                    <Input 
-                      value={connectionString}
-                      onChange={(e) => setConnectionString(e.target.value)}
-                      placeholder={`${dbType}://username:password@host:port/database`}
-                      className="bg-[var(--surface-0)] border-slate-800 focus:border-indigo-500 h-12 rounded-xl text-sm placeholder:text-slate-600 font-mono text-white"
-                    />
-                    <p className="text-xs text-slate-500 font-medium">Provide a valid {dbType} connection string.</p>
-                  </div>
-
-                  <div className="space-y-3">
-                    <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">Display Name (Optional)</label>
-                    <Input 
-                      value={displayName}
-                      onChange={(e) => setDisplayName(e.target.value)}
-                      placeholder="e.g., Production Database"
-                      className="bg-[var(--surface-0)] border-slate-800 focus:border-indigo-500 h-12 rounded-xl text-sm placeholder:text-slate-600 text-white"
-                    />
-                  </div>
-                  
-                  {testResult && (
-                    <motion.div 
-                      initial={{ opacity: 0, scale: 0.95 }}
-                      animate={{ opacity: 1, scale: 1 }}
-                      className={`p-4 rounded-xl flex items-start gap-3 border ${
-                        testResult.status === 'success' 
-                          ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
-                          : 'bg-rose-500/10 border-rose-500/20 text-rose-400'
-                      }`}
-                    >
-                      {testResult.status === 'success' ? <CheckCircle2 className="h-5 w-5 mt-0.5 shrink-0" /> : <AlertCircle className="h-5 w-5 mt-0.5 shrink-0" />}
-                      <p className="text-sm font-medium">{testResult.message}</p>
-                    </motion.div>
-                  )}
-
-                  <div className="flex items-center justify-between bg-[var(--surface-0)] border border-slate-800 rounded-xl p-4 cursor-pointer hover:border-slate-700 transition-colors">
-                    <span className="text-sm font-bold text-slate-300">Advanced Options</span>
-                    <ChevronDown className="h-4 w-4 text-slate-500" />
-                  </div>
-                </div>
-
-                {/* Action Buttons */}
-                <div className="flex items-center justify-end gap-4 pt-6 mt-4 border-t border-slate-800/50">
-                  <Button 
-                    variant="ghost" 
-                    onClick={() => setShowAddForm(false)}
-                    className="text-slate-400 hover:text-white hover:bg-slate-800 h-11 px-6 rounded-xl font-bold"
-                  >
-                    Cancel
-                  </Button>
-                  <Button 
-                    onClick={handleTestAndSave}
-                    disabled={isTesting || !connectionString}
-                    className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold h-11 px-8 rounded-xl shadow-lg shadow-indigo-600/20 disabled:opacity-50"
-                  >
-                    {isTesting ? (
-                      <>
-                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                        Testing...
-                      </>
-                    ) : (
-                      "Test & Save Connection"
-                    )}
-                  </Button>
-                </div>
-              </div>
-            </motion.div>
+            </div>
           )}
         </AnimatePresence>
       </div>

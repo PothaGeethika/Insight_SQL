@@ -60,7 +60,7 @@ class SQLAgent:
         if provider == "gemini":
             api_key = os.getenv("GEMINI_API_KEY")
             return ChatGoogleGenerativeAI(
-                model=model_name or "gemini-1.5-pro",
+                model=model_name or "gemini-2.0-flash",
                 google_api_key=api_key,
                 temperature=0
             )

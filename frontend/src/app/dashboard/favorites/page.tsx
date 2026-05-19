@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import { useState, useEffect } from "react";
+import * as React from "react";
 import { useRouter } from "next/navigation";
 import {
   Star,
@@ -11,27 +12,41 @@ import {
   MoreHorizontal,
   ArrowUpRight,
   Filter,
-  LayoutGrid,
-  List as ListIcon
+  Clock,
+  Trash2,
+  Bookmark,
+  Plus
 } from "lucide-react";
-import { motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+  DropdownMenuGroup,
+} from "@/components/ui/dropdown-menu";
 
 export default function FavoritesPage() {
   const router = useRouter();
   const [searchQuery, setSearchQuery] = useState("");
-  const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
+  const [activeTab, setActiveTab] = useState("all");
+  const [sortBy, setSortBy] = useState("newest");
+  const [dateFilter, setDateFilter] = useState("all");
 
   const [favDatabases, setFavDatabases] = useState<any[]>([]);
   const [favQuestions, setFavQuestions] = useState<any[]>([]);
+  const [favProjects, setFavProjects] = useState<any[]>([]);
   const [favFolders, setFavFolders] = useState<any[]>([]);
 
-  useEffect(() => {
+  const loadFavorites = () => {
     // 1. Load Favorite Databases
     const savedDbIds = JSON.parse(localStorage.getItem("db_favorites") || "[]");
     fetch("http://localhost:8000/databases")
@@ -42,16 +57,29 @@ export default function FavoritesPage() {
           setFavDatabases(favoritedDbs);
         }
       })
-      .catch(err => console.error("Error fetching databases for favorites:", err));
+      .catch(err => {
+        console.error("Error fetching databases for favorites:", err);
+        // Offline / mock fallback databases if present
+        setFavDatabases([]);
+      });
 
     // 2. Load Favorite Questions
     const savedFavQueries = JSON.parse(localStorage.getItem("favorite_queries") || "[]");
     setFavQuestions(savedFavQueries);
 
-    // 3. Load Favorite History (Folders/Sessions)
+    // 3. Load Favorite Projects
+    const savedProjects = JSON.parse(localStorage.getItem("insight_projects") || "[]");
+    const favoritedProjects = savedProjects.filter((p: any) => p.isFavorite);
+    setFavProjects(favoritedProjects);
+
+    // 4. Load Favorite History (Sessions)
     const savedSessions = JSON.parse(localStorage.getItem("chat_sessions") || "[]");
     const favoritedSessions = savedSessions.filter((s: any) => s.isFavorite);
     setFavFolders(favoritedSessions);
+  };
+
+  useEffect(() => {
+    loadFavorites();
   }, []);
 
   const handleOpenChat = (sessionId: string) => {
@@ -61,6 +89,124 @@ export default function FavoritesPage() {
     }
   };
 
+  const handleOpenProject = (projectId: string) => {
+    router.push("/dashboard/projects");
+  };
+
+  const handleOpenDatabase = (dbId: string) => {
+    router.push("/dashboard/databases");
+  };
+
+  const handleRemoveFavoriteDb = (dbId: string) => {
+    const saved = JSON.parse(localStorage.getItem("db_favorites") || "[]");
+    const updated = saved.filter((id: string) => id !== dbId);
+    localStorage.setItem("db_favorites", JSON.stringify(updated));
+    setFavDatabases(favDatabases.filter((db: any) => db.id !== dbId));
+  };
+
+  const handleRemoveFavoriteQuestion = (qId: string) => {
+    const saved = JSON.parse(localStorage.getItem("favorite_queries") || "[]");
+    const updated = saved.filter((q: any) => q.id !== qId);
+    localStorage.setItem("favorite_queries", JSON.stringify(updated));
+    setFavQuestions(updated);
+  };
+
+  const handleRemoveFavoriteProject = (projectId: string) => {
+    const saved = JSON.parse(localStorage.getItem("insight_projects") || "[]");
+    const updated = saved.map((p: any) => {
+      if (p.id === projectId) {
+        return { ...p, isFavorite: false };
+      }
+      return p;
+    });
+    localStorage.setItem("insight_projects", JSON.stringify(updated));
+    setFavProjects(updated.filter((p: any) => p.isFavorite));
+  };
+
+  const handleRemoveFavoriteHistory = (sessionId: string) => {
+    const saved = JSON.parse(localStorage.getItem("chat_sessions") || "[]");
+    const updated = saved.map((s: any) => {
+      if (s.id === sessionId) {
+        return { ...s, isFavorite: false };
+      }
+      return s;
+    });
+    localStorage.setItem("chat_sessions", JSON.stringify(updated));
+    setFavFolders(updated.filter((s: any) => s.isFavorite));
+  };
+
+  // Filter and Sort logic
+  const processItems = (items: any[], searchKey: string) => {
+    // 1. Text Search & Attach Index for Fallback Sorting
+    let processed = items.map((item, idx) => ({ item, originalIndex: idx })).filter(({ item }) => 
+      (item[searchKey] || "").toLowerCase().includes(searchQuery.toLowerCase())
+    );
+
+    // 2. Date Added Filter
+    if (dateFilter !== "all") {
+      const now = new Date();
+      processed = processed.filter(({ item }) => {
+        const itemDateStr = item.timestamp || item.updatedAt || item.createdAt;
+        if (!itemDateStr) return true; 
+        
+        let itemDate = new Date(itemDateStr);
+        if (isNaN(itemDate.getTime())) return true; // Keep items with unparseable dates
+
+        const diffTime = Math.abs(now.getTime() - itemDate.getTime());
+        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)); 
+
+        if (dateFilter === "today") return diffDays <= 1;
+        if (dateFilter === "week") return diffDays <= 7;
+        return true;
+      });
+    }
+
+    // 3. Sorting
+    processed.sort((aObj, bObj) => {
+      const a = aObj.item;
+      const b = bObj.item;
+      if (sortBy === "az") {
+        const valA = (a[searchKey] || "").toLowerCase();
+        const valB = (b[searchKey] || "").toLowerCase();
+        return valA.localeCompare(valB);
+      } else {
+        const timeA = new Date(a.timestamp || a.updatedAt || a.createdAt || 0).getTime();
+        const timeB = new Date(b.timestamp || b.updatedAt || b.createdAt || 0).getTime();
+        
+        const validTimeA = isNaN(timeA) || timeA === 0 ? aObj.originalIndex : timeA;
+        const validTimeB = isNaN(timeB) || timeB === 0 ? bObj.originalIndex : timeB;
+
+        if (sortBy === "newest") {
+          return validTimeB - validTimeA;
+        } else {
+          return validTimeA - validTimeB;
+        }
+      }
+    });
+
+    return processed.map(obj => obj.item);
+  };
+
+  const filteredDbs = processItems(favDatabases, "name");
+  const filteredQuestions = processItems(favQuestions, "question");
+  const filteredProjects = processItems(favProjects, "title");
+  const filteredHistory = processItems(favFolders, "title");
+
+  const totalFavsCount = favDatabases.length + favQuestions.length + favProjects.length + favFolders.length;
+
+  const sidebarItems = [
+    { id: "all", label: "All Favorites", count: totalFavsCount, icon: Star, color: "text-amber-500 fill-amber-500 bg-amber-500/10" },
+    { id: "databases", label: "Databases", count: favDatabases.length, icon: Database, color: "text-blue-500 bg-blue-500/10" },
+    { id: "questions", label: "Questions", count: favQuestions.length, icon: MessageSquare, color: "text-indigo-500 bg-indigo-500/10" },
+    { id: "projects", label: "Projects", count: favProjects.length, icon: Folder, color: "text-purple-500 bg-purple-500/10" },
+    { id: "history", label: "History", count: favFolders.length, icon: Clock, color: "text-emerald-500 bg-emerald-500/10" },
+  ];
+
+  const itemVariants = {
+    hidden: { opacity: 0, y: 15 },
+    show: { opacity: 1, y: 0, transition: { duration: 0.3 } },
+  };
+
   return (
     <div className="h-full flex flex-col bg-[var(--surface-0)] text-slate-300 p-8 space-y-8 overflow-hidden">
       {/* Header Area */}
@@ -68,11 +214,11 @@ export default function FavoritesPage() {
         <div className="space-y-1">
           <div className="flex items-center gap-3">
             <div className="h-10 w-10 rounded-2xl bg-indigo-600/10 border border-indigo-500/20 flex items-center justify-center shadow-2xl">
-              <Star className="h-5 w-5 text-indigo-500 fill-indigo-500" />
+              <Star className="h-5 w-5 text-indigo-500 fill-indigo-500 animate-pulse" />
             </div>
             <h1 className="text-3xl font-black text-white tracking-tight">Favorites</h1>
           </div>
-          <p className="text-slate-500 text-sm font-medium ml-1">Access your most important databases, questions, and folders.</p>
+          <p className="text-slate-500 text-sm font-medium ml-1">Access your favorited databases, projects, questions, and session history.</p>
         </div>
 
         <div className="flex items-center gap-3">
@@ -80,72 +226,136 @@ export default function FavoritesPage() {
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-600 group-focus-within:text-indigo-500 transition-colors" />
             <Input
               placeholder="Search favorites..."
-              className="w-64 bg-[var(--surface-1)] border-slate-800 focus:border-indigo-500/50 h-10 pl-10 text-sm rounded-xl transition-all"
+              className="w-64 bg-[var(--surface-1)] border-slate-800 focus:border-indigo-500/50 h-10 pl-10 text-sm rounded-xl transition-all text-white"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
             />
           </div>
-          <div className="flex items-center bg-[var(--surface-1)] border border-slate-800 rounded-xl p-1">
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => setViewMode("grid")}
-              className={`h-8 w-8 rounded-lg ${viewMode === "grid" ? "bg-indigo-600 text-white" : "text-slate-500 hover:text-white"}`}
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              className="inline-flex shrink-0 items-center justify-center bg-[var(--surface-1)] border border-slate-800 hover:bg-[var(--surface-2)] hover:text-white rounded-xl gap-2 text-xs font-black uppercase tracking-widest h-10 px-4 transition-colors"
             >
-              <LayoutGrid className="h-4 w-4" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => setViewMode("list")}
-              className={`h-8 w-8 rounded-lg ${viewMode === "list" ? "bg-indigo-600 text-white" : "text-slate-500 hover:text-white"}`}
-            >
-              <ListIcon className="h-4 w-4" />
-            </Button>
-          </div>
-          <Button variant="outline" className="bg-[var(--surface-1)] border-slate-800 rounded-xl gap-2 text-xs font-black uppercase tracking-widest h-10">
-            <Filter className="h-4 w-4" />
-            Filter
-          </Button>
+              <Filter className="h-4 w-4" />
+              Filter
+              {(sortBy !== "newest" || dateFilter !== "all") && (
+                <Badge className="ml-1 px-1.5 h-5 bg-indigo-500 hover:bg-indigo-600 text-white border-none rounded">1</Badge>
+              )}
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-56 bg-[var(--surface-1)] border-slate-800 text-slate-300">
+              <DropdownMenuGroup>
+                <DropdownMenuLabel className="font-black text-white text-xs uppercase tracking-widest">Sort By</DropdownMenuLabel>
+                <DropdownMenuSeparator className="bg-slate-800" />
+                <DropdownMenuRadioGroup value={sortBy} onValueChange={setSortBy}>
+                  <DropdownMenuRadioItem value="newest" className="focus:bg-[var(--surface-2)] focus:text-white cursor-pointer">Newest First</DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="oldest" className="focus:bg-[var(--surface-2)] focus:text-white cursor-pointer">Oldest First</DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="az" className="focus:bg-[var(--surface-2)] focus:text-white cursor-pointer">Alphabetical (A-Z)</DropdownMenuRadioItem>
+                </DropdownMenuRadioGroup>
+              </DropdownMenuGroup>
+
+              <DropdownMenuSeparator className="bg-slate-800 my-1" />
+              
+              <DropdownMenuGroup>
+                <DropdownMenuLabel className="font-black text-white text-xs uppercase tracking-widest">Date Added</DropdownMenuLabel>
+                <DropdownMenuSeparator className="bg-slate-800" />
+                <DropdownMenuRadioGroup value={dateFilter} onValueChange={setDateFilter}>
+                  <DropdownMenuRadioItem value="all" className="focus:bg-[var(--surface-2)] focus:text-white cursor-pointer">All Time</DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="today" className="focus:bg-[var(--surface-2)] focus:text-white cursor-pointer">Added Today</DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="week" className="focus:bg-[var(--surface-2)] focus:text-white cursor-pointer">Last 7 Days</DropdownMenuRadioItem>
+                </DropdownMenuRadioGroup>
+              </DropdownMenuGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </div>
 
-      <Tabs defaultValue="all" className="flex-1 flex flex-col min-h-0">
-        <TabsList className="bg-transparent border-b border-slate-900/50 w-full justify-start rounded-none h-12 p-0 mb-8">
-          <TabsTrigger value="all" className="data-[state=active]:bg-transparent data-[state=active]:text-white data-[state=active]:border-b-2 data-[state=active]:border-indigo-600 rounded-none px-8 text-sm font-black uppercase tracking-widest transition-all">All Favorites</TabsTrigger>
-          <TabsTrigger value="databases" className="data-[state=active]:bg-transparent data-[state=active]:text-white data-[state=active]:border-b-2 data-[state=active]:border-indigo-600 rounded-none px-8 text-sm font-black uppercase tracking-widest transition-all">Databases</TabsTrigger>
-          <TabsTrigger value="questions" className="data-[state=active]:bg-transparent data-[state=active]:text-white data-[state=active]:border-b-2 data-[state=active]:border-indigo-600 rounded-none px-8 text-sm font-black uppercase tracking-widest transition-all">Questions</TabsTrigger>
-          <TabsTrigger value="folders" className="data-[state=active]:bg-transparent data-[state=active]:text-white data-[state=active]:border-b-2 data-[state=active]:border-indigo-600 rounded-none px-8 text-sm font-black uppercase tracking-widest transition-all">History</TabsTrigger>
-        </TabsList>
-
-        <ScrollArea className="flex-1 -mx-2 px-2">
-          <TabsContent value="all" className="mt-0 space-y-12 pb-20">
-
-            {/* Databases Section */}
-            {favDatabases.length > 0 && (
-              <section className="space-y-6">
-                <div className="flex items-center justify-between">
-                  <h3 className="text-xs font-black uppercase tracking-[0.2em] text-slate-500">Favorite Databases</h3>
+      {/* Main Split Layout */}
+      <div className="flex-1 flex gap-8 min-h-0 overflow-hidden">
+        
+        {/* Left Side Bar Boxes */}
+        <div className="w-64 flex flex-col gap-3 shrink-0">
+          {sidebarItems.map((item) => {
+            const Icon = item.icon;
+            const isActive = activeTab === item.id;
+            return (
+              <button
+                key={item.id}
+                onClick={() => setActiveTab(item.id)}
+                className={`w-full text-left p-4 rounded-2xl border transition-all duration-300 flex items-center justify-between group cursor-pointer ${
+                  isActive 
+                    ? "bg-indigo-600/15 border-indigo-500/35 text-white shadow-lg shadow-indigo-650/5" 
+                    : "bg-[var(--surface-1)] border-slate-850 text-slate-400 hover:text-white hover:border-slate-700 hover:bg-[var(--surface-2)]"
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  <div className={`h-9 w-9 rounded-xl flex items-center justify-center transition-all ${
+                    isActive ? "bg-indigo-600 text-white" : item.color
+                  }`}>
+                    <Icon className="h-4.5 w-4.5" />
+                  </div>
+                  <span className="text-sm font-bold tracking-tight">{item.label}</span>
                 </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-                  {favDatabases.map((db) => (
-                    <motion.div key={db.id} whileHover={{ y: -5 }}>
-                      <Card className="bg-[var(--surface-1)] border-slate-900 shadow-2xl rounded-3xl overflow-hidden group border-none">
-                        <CardContent className="p-6">
-                          <div className="flex items-start justify-between mb-6">
-                            <div className="h-12 w-12 rounded-2xl bg-indigo-600/10 border border-indigo-500/20 flex items-center justify-center text-indigo-500 shadow-inner group-hover:bg-indigo-600 group-hover:text-white transition-all duration-500">
-                              <Database className="h-6 w-6" />
+                <Badge 
+                  variant="secondary" 
+                  className={`text-[10px] font-black rounded-lg px-2 py-0.5 border transition-all ${
+                    isActive 
+                      ? "bg-indigo-600/30 text-indigo-300 border-indigo-550/20" 
+                      : "bg-slate-900/60 text-slate-500 border-slate-800/80 group-hover:text-slate-300"
+                  }`}
+                >
+                  {item.count}
+                </Badge>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Right Scrollable Content Pane */}
+        <ScrollArea className="flex-1 -mx-2 px-2 h-full">
+          <div className="space-y-10 pb-20">
+            
+            {/* PROJECTS SECTION */}
+            {(activeTab === "all" || activeTab === "projects") && filteredProjects.length > 0 && (
+              <section className="space-y-4">
+                <div className="flex items-center justify-between border-b border-slate-900 pb-2">
+                  <h3 className="text-xs font-black uppercase tracking-[0.2em] text-slate-500 flex items-center gap-2">
+                    <Folder className="h-4 w-4 text-purple-400" />
+                    Favorite Projects
+                  </h3>
+                  <Badge className="bg-purple-500/10 text-purple-400 border-none rounded-md text-[10px] font-bold px-2">{filteredProjects.length}</Badge>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  {filteredProjects.map((project) => (
+                    <motion.div key={project.id} variants={itemVariants} initial="hidden" animate="show" whileHover={{ y: -4 }} className="h-full">
+                      <Card 
+                        className="bg-[var(--surface-1)] border border-slate-850 hover:border-slate-700/80 shadow-2xl rounded-3xl overflow-hidden group flex flex-col h-full cursor-pointer hover:bg-[var(--surface-2)] transition-all"
+                        onClick={() => handleOpenProject(project.id)}
+                      >
+                        <CardContent className="p-6 flex flex-col h-full">
+                          <div className="flex items-start justify-between mb-4">
+                            <div className="h-12 w-12 rounded-2xl bg-purple-500/10 border border-purple-500/20 flex items-center justify-center text-purple-400 shadow-inner group-hover:bg-purple-600 group-hover:text-white transition-all duration-500">
+                              <Folder className="h-6 w-6" />
                             </div>
-                            <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-600 hover:text-white rounded-lg">
-                              <MoreHorizontal className="h-5 w-5" />
+                            <Button 
+                              variant="ghost" 
+                              size="icon" 
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleRemoveFavoriteProject(project.id);
+                              }}
+                              className="h-8 w-8 text-amber-400 hover:text-slate-500 rounded-lg cursor-pointer z-10"
+                              title="Unfavorite"
+                            >
+                              <Star className="h-5 w-5 fill-amber-400 text-amber-400" />
                             </Button>
                           </div>
-                          <div className="space-y-1 mb-6">
-                            <h4 className="text-lg font-black text-white tracking-tight">{db.name}</h4>
-                            <p className="text-xs text-slate-500 font-medium">{db.type} • {db.database}</p>
+                          <div className="space-y-1 mb-6 flex-1">
+                            <h4 className="text-lg font-black text-white tracking-tight group-hover:text-indigo-400 transition-colors">{project.title}</h4>
+                            <p className="text-xs text-slate-400 line-clamp-2 leading-relaxed">{project.description}</p>
                           </div>
-                          <div className="flex items-center justify-between pt-6 border-t border-slate-900/50">
-                            <Badge className="bg-emerald-500/10 text-emerald-500 border-none px-2 py-0.5 rounded-lg text-[10px] font-black uppercase tracking-wider">Connected</Badge>
+                          <div className="flex items-center gap-2 pt-4 border-t border-slate-900/60">
+                            <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">
+                              {project.databases?.length || 0} Connected DBs
+                            </span>
                           </div>
                         </CardContent>
                       </Card>
@@ -155,88 +365,184 @@ export default function FavoritesPage() {
               </section>
             )}
 
-            {/* Questions Section */}
-            {favQuestions.length > 0 && (
-              <section className="space-y-6">
-                <div className="flex items-center justify-between">
-                  <h3 className="text-xs font-black uppercase tracking-[0.2em] text-slate-500">Saved Questions</h3>
-                </div>
-                <div className="space-y-3">
-                  {favQuestions.map((q) => (
-                    <Card
-                      key={q.id}
-                      className="bg-[var(--surface-1)] border-slate-900 hover:border-indigo-500/30 transition-all rounded-[24px] group border-none shadow-xl cursor-pointer"
-                      onClick={() => handleOpenChat(q.sessionId)}
-                    >
-                      <CardContent className="p-5 flex items-center gap-5">
-                        <div className="h-10 w-10 rounded-xl bg-slate-900 flex items-center justify-center text-slate-500 group-hover:text-indigo-500 transition-colors">
-                          <MessageSquare className="h-5 w-5" />
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-bold text-white truncate">{q.question}</p>
-                          <div className="flex items-center gap-3 mt-1">
-                            <span className="text-[10px] text-slate-600 font-bold">Added on {q.timestamp}</span>
-                          </div>
-                        </div>
-                        <Button variant="ghost" size="icon" className="h-9 w-9 text-slate-600 hover:text-white rounded-xl">
-                          <ArrowUpRight className="h-5 w-5" />
-                        </Button>
-                      </CardContent>
-                    </Card>
-                  ))}
-                </div>
-              </section>
-            )}
-
-            {/* Folders/History Section */}
-            {favFolders.length > 0 && (
-              <section className="space-y-6">
-                <div className="flex items-center justify-between">
-                  <h3 className="text-xs font-black uppercase tracking-[0.2em] text-slate-500">Favorite History</h3>
+            {/* DATABASES SECTION */}
+            {(activeTab === "all" || activeTab === "databases") && filteredDbs.length > 0 && (
+              <section className="space-y-4">
+                <div className="flex items-center justify-between border-b border-slate-900 pb-2">
+                  <h3 className="text-xs font-black uppercase tracking-[0.2em] text-slate-500 flex items-center gap-2">
+                    <Database className="h-4 w-4 text-blue-400" />
+                    Favorite Databases
+                  </h3>
+                  <Badge className="bg-blue-500/10 text-blue-400 border-none rounded-md text-[10px] font-bold px-2">{filteredDbs.length}</Badge>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  {favFolders.map((folder) => (
-                    <Card
-                      key={folder.id}
-                      className="bg-[var(--surface-1)] border-slate-900 rounded-3xl group border-none shadow-xl hover:bg-[var(--surface-2)] transition-all cursor-pointer"
-                      onClick={() => handleOpenChat(folder.id)}
-                    >
-                      <CardContent className="p-6 flex items-center gap-6">
-                        <div className="h-14 w-14 rounded-2xl bg-amber-500/10 flex items-center justify-center text-amber-500 group-hover:scale-110 transition-transform duration-500">
-                          <Folder className="h-7 w-7 fill-amber-500/20" />
-                        </div>
-                        <div className="flex-1">
-                          <h4 className="text-base font-black text-white tracking-tight">{folder.title}</h4>
-                          <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mt-1">{folder.messages?.length || 0} messages</p>
-                        </div>
-                        <ArrowUpRight className="h-5 w-5 text-slate-700 group-hover:text-white transition-colors" />
-                      </CardContent>
-                    </Card>
+                  {filteredDbs.map((db) => (
+                    <motion.div key={db.id} variants={itemVariants} initial="hidden" animate="show" whileHover={{ y: -4 }}>
+                      <Card 
+                        className="bg-[var(--surface-1)] border border-slate-850 hover:border-slate-700/80 shadow-2xl rounded-3xl overflow-hidden group flex flex-col h-full border-none cursor-pointer hover:bg-[var(--surface-2)] transition-all"
+                        onClick={() => handleOpenDatabase(db.id)}
+                      >
+                        <CardContent className="p-6">
+                          <div className="flex items-start justify-between mb-4">
+                            <div className="h-12 w-12 rounded-2xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400 shadow-inner group-hover:bg-blue-600 group-hover:text-white transition-all duration-500">
+                              <Database className="h-6 w-6" />
+                            </div>
+                            <Button 
+                              variant="ghost" 
+                              size="icon" 
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleRemoveFavoriteDb(db.id);
+                              }}
+                              className="h-8 w-8 text-amber-400 hover:text-slate-500 rounded-lg cursor-pointer z-10"
+                              title="Unfavorite"
+                            >
+                              <Star className="h-5 w-5 fill-amber-400 text-amber-400" />
+                            </Button>
+                          </div>
+                          <div className="space-y-1 mb-6">
+                            <h4 className="text-lg font-black text-white tracking-tight group-hover:text-indigo-400 transition-colors">{db.name}</h4>
+                            <p className="text-xs text-slate-500 font-medium">{db.type} • {db.database || "Database"}</p>
+                          </div>
+                          <div className="flex items-center justify-between pt-4 border-t border-slate-900/60">
+                            <Badge className="bg-emerald-500/10 text-emerald-400 border-none px-2 py-0.5 rounded-lg text-[9px] font-black uppercase tracking-wider">Connected</Badge>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    </motion.div>
                   ))}
                 </div>
               </section>
             )}
 
-            {favDatabases.length === 0 && favQuestions.length === 0 && favFolders.length === 0 && (
-              <div className="flex flex-col items-center justify-center py-20 text-slate-500">
-                <Star className="h-12 w-12 mb-4 opacity-20" />
-                <p className="text-sm font-bold">No favorites added yet.</p>
-                <p className="text-xs mt-1">Star databases, questions, or history sessions to see them here.</p>
+            {/* QUESTIONS SECTION */}
+            {(activeTab === "all" || activeTab === "questions") && filteredQuestions.length > 0 && (
+              <section className="space-y-4">
+                <div className="flex items-center justify-between border-b border-slate-900 pb-2">
+                  <h3 className="text-xs font-black uppercase tracking-[0.2em] text-slate-500 flex items-center gap-2">
+                    <MessageSquare className="h-4 w-4 text-indigo-400" />
+                    Saved Questions
+                  </h3>
+                  <Badge className="bg-indigo-500/10 text-indigo-400 border-none rounded-md text-[10px] font-bold px-2">{filteredQuestions.length}</Badge>
+                </div>
+                <div className="space-y-3">
+                  {filteredQuestions.map((q) => (
+                    <motion.div key={q.id} variants={itemVariants} initial="hidden" animate="show">
+                      <Card
+                        className="bg-[var(--surface-1)] border border-slate-850 hover:border-slate-700/80 hover:bg-[var(--surface-2)] transition-all rounded-[24px] group border-none shadow-xl cursor-pointer"
+                      >
+                        <CardContent className="p-5 flex items-center gap-5">
+                          <div 
+                            className="h-10 w-10 rounded-xl bg-slate-900 flex items-center justify-center text-slate-500 group-hover:text-indigo-550 transition-colors shrink-0"
+                            onClick={() => handleOpenChat(q.sessionId)}
+                          >
+                            <MessageSquare className="h-5 w-5" />
+                          </div>
+                          <div className="flex-1 min-w-0" onClick={() => handleOpenChat(q.sessionId)}>
+                            <p className="text-sm font-bold text-white group-hover:text-indigo-400 transition-colors truncate">{q.question}</p>
+                            <div className="flex items-center gap-3 mt-1">
+                              <span className="text-[10px] text-slate-650 font-bold uppercase tracking-wider">Added on {q.timestamp}</span>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <Button 
+                              variant="ghost" 
+                              size="icon" 
+                              onClick={() => handleRemoveFavoriteQuestion(q.id)}
+                              className="h-9 w-9 text-amber-400 hover:text-slate-500 rounded-xl cursor-pointer"
+                              title="Unfavorite"
+                            >
+                              <Star className="h-4.5 w-4.5 fill-amber-400 text-amber-400" />
+                            </Button>
+                            <Button 
+                              variant="ghost" 
+                              size="icon" 
+                              onClick={() => handleOpenChat(q.sessionId)}
+                              className="h-9 w-9 text-slate-600 hover:text-white rounded-xl"
+                            >
+                              <ArrowUpRight className="h-5 w-5" />
+                            </Button>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    </motion.div>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {/* HISTORY SECTION */}
+            {(activeTab === "all" || activeTab === "history") && filteredHistory.length > 0 && (
+              <section className="space-y-4">
+                <div className="flex items-center justify-between border-b border-slate-900 pb-2">
+                  <h3 className="text-xs font-black uppercase tracking-[0.2em] text-slate-500 flex items-center gap-2">
+                    <Clock className="h-4 w-4 text-emerald-400" />
+                    Favorite Sessions
+                  </h3>
+                  <Badge className="bg-emerald-500/10 text-emerald-400 border-none rounded-md text-[10px] font-bold px-2">{filteredHistory.length}</Badge>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  {filteredHistory.map((folder) => (
+                    <motion.div key={folder.id} variants={itemVariants} initial="hidden" animate="show" whileHover={{ y: -4 }}>
+                      <Card className="bg-[var(--surface-1)] border border-slate-850 hover:border-slate-700/80 shadow-xl hover:bg-[var(--surface-2)] transition-all rounded-3xl overflow-hidden group flex flex-col h-full border-none">
+                        <CardContent className="p-6 flex items-center gap-6 cursor-pointer">
+                          <div 
+                            className="h-14 w-14 rounded-2xl bg-amber-500/10 flex items-center justify-center text-amber-500 group-hover:scale-110 transition-transform duration-500 shrink-0"
+                            onClick={() => handleOpenChat(folder.id)}
+                          >
+                            <Clock className="h-7 w-7" />
+                          </div>
+                          <div className="flex-1 min-w-0" onClick={() => handleOpenChat(folder.id)}>
+                            <h4 className="text-base font-black text-white tracking-tight group-hover:text-indigo-400 transition-colors truncate">{folder.title}</h4>
+                            <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mt-1">{folder.messages?.length || 0} messages</p>
+                          </div>
+                          <div className="flex items-center gap-1 shrink-0">
+                            <Button 
+                              variant="ghost" 
+                              size="icon" 
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleRemoveFavoriteHistory(folder.id);
+                              }}
+                              className="h-9 w-9 text-amber-400 hover:text-slate-500 rounded-xl cursor-pointer"
+                              title="Unfavorite"
+                            >
+                              <Star className="h-4.5 w-4.5 fill-amber-400 text-amber-400" />
+                            </Button>
+                            <ArrowUpRight className="h-5 w-5 text-slate-750 group-hover:text-white transition-colors" onClick={() => handleOpenChat(folder.id)} />
+                          </div>
+                        </CardContent>
+                      </Card>
+                    </motion.div>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {/* EMPTY STATE fallback for active Tab */}
+            {((activeTab === "all" && totalFavsCount === 0) ||
+              (activeTab === "databases" && filteredDbs.length === 0) ||
+              (activeTab === "questions" && filteredQuestions.length === 0) ||
+              (activeTab === "projects" && filteredProjects.length === 0) ||
+              (activeTab === "history" && filteredHistory.length === 0)) && (
+              <div className="flex flex-col items-center justify-center py-20 px-4 border border-dashed border-slate-800 rounded-3xl bg-slate-900/10 max-w-xl mx-auto my-10 text-center">
+                <div className="h-16 w-16 rounded-2xl bg-indigo-500/10 flex items-center justify-center text-indigo-400 mb-6 border border-indigo-500/25">
+                  <Star className="h-8 w-8 animate-pulse text-indigo-400" />
+                </div>
+                <h3 className="text-xl font-bold text-white mb-3">No Favorites Found</h3>
+                <p className="text-sm text-slate-400 mb-6 leading-relaxed max-w-sm">
+                  {searchQuery 
+                    ? "No favorited items match your current search query." 
+                    : `You haven't added any favorited ${activeTab === "all" ? "items" : activeTab} yet! Star items across your dashboard to see them here.`
+                  }
+                </p>
               </div>
             )}
-          </TabsContent>
 
-          <TabsContent value="databases">
-            {/* Similar structure but only for databases */}
-          </TabsContent>
-          <TabsContent value="questions">
-            {/* Similar structure but only for questions */}
-          </TabsContent>
-          <TabsContent value="folders">
-            {/* Similar structure but only for folders */}
-          </TabsContent>
+          </div>
         </ScrollArea>
-      </Tabs>
+
+      </div>
     </div>
   );
 }

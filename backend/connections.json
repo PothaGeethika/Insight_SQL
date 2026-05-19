@@ -1,13 +1,35 @@
 [
     {
-        "name": "sales_db",
+        "name": "Demo",
         "type": "postgresql",
         "host": "localhost",
         "port": 5432,
-        "database": "insight_db",
+        "database": "insightsql_db",
         "username": "postgres",
-        "password": "postgres123",
-        "id": "fd2fadc5-80ef-4f43-8704-712d6c4fee45",
+        "password": "Geethuhyma@2902",
+        "id": "d34d37a5-566a-4500-8fd9-8421ae31457a",
+        "is_default": false
+    },
+    {
+        "name": "project",
+        "type": "postgresql",
+        "host": "localhost",
+        "port": 5432,
+        "database": "insightsql_db",
+        "username": "postgres",
+        "password": "Geethuhyma@2902",
+        "id": "1bd75199-9cbb-4236-9d0d-7936a6569fa3",
+        "is_default": true
+    },
+    {
+        "name": "insight",
+        "type": "postgresql",
+        "host": "localhost",
+        "port": 5432,
+        "database": "insightsql_db",
+        "username": "postgres",
+        "password": "Geethuhyma@2902",
+        "id": "f977b724-7fab-485b-8078-363f27b5da5a",
         "is_default": true
     }
 ]

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Send,
@@ -35,6 +36,8 @@ import {
   ArrowUpRight,
   Calendar,
   Download,
+  Search,
+  Bookmark,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -129,15 +132,103 @@ export default function ChatPage() {
   const [suggestions, setSuggestions] = useState<string[]>([]);
 
   const [provider, setProvider] = useState<string>("gemini");
-  const [model, setModel] = useState<string>("gemini-1.5-pro");
+  const [model, setModel] = useState<string>("gemini-2.0-flash");
   const [databases, setDatabases] = useState<any[]>([]);
   const [selectedDb, setSelectedDb] = useState<string>("");
+  const [projects, setProjects] = useState<any[]>([]);
+  const [selectedProject, setSelectedProject] = useState<string>("");
   const [history, setHistory] = useState<{ id: string; title: string; active: boolean; messages: Message[]; isFavorite?: boolean }[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [isHistoryOpen, setIsHistoryOpen] = useState(true);
+  const [isHistorySearchOpen, setIsHistorySearchOpen] = useState(false);
+  const [historySearchQuery, setHistorySearchQuery] = useState("");
+  const [savedQueryIds, setSavedQueryIds] = useState<Set<string>>(new Set());
   const [isResultsOpen, setIsResultsOpen] = useState(false);
   const [activeResult, setActiveResult] = useState<any>(null);
   const [resultsTab, setResultsTab] = useState("results");
+
+  const currentProject = projects.find(p => p.id === selectedProject);
+
+  const filteredDatabases = databases.filter(db => {
+    // Only display connected databases
+    if (!db.is_default) return false;
+    if (!selectedProject) return true;
+    return currentProject?.databases?.some((pdb: any) => pdb.id === db.id);
+  });
+
+  const [historyWidth, setHistoryWidth] = useState(256);
+  const [isResizingHistory, setIsResizingHistory] = useState(false);
+
+  const startResizingHistory = (mouseDownEvent: React.MouseEvent) => {
+    mouseDownEvent.preventDefault();
+    setIsResizingHistory(true);
+  };
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isResizingHistory) return;
+      setHistoryWidth((prev) => {
+        const next = prev + e.movementX;
+        if (next < 120) {
+          setIsHistoryOpen(false);
+          return 256;
+        }
+        setIsHistoryOpen(true);
+        return next > 180 && next < 450 ? next : prev;
+      });
+    };
+
+    const handleMouseUp = () => {
+      setIsResizingHistory(false);
+    };
+
+    if (isResizingHistory) {
+      document.addEventListener("mousemove", handleMouseMove);
+      document.addEventListener("mouseup", handleMouseUp);
+    }
+
+    return () => {
+      document.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, [isResizingHistory]);
+
+  const [summaryWidth, setSummaryWidth] = useState(500);
+  const [isResizingSummary, setIsResizingSummary] = useState(false);
+
+  const startResizingSummary = (mouseDownEvent: React.MouseEvent) => {
+    mouseDownEvent.preventDefault();
+    setIsResizingSummary(true);
+  };
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isResizingSummary) return;
+      setSummaryWidth((prev) => {
+        const next = prev - e.movementX;
+        if (next < 150) {
+          setIsResultsOpen(false);
+          return 500;
+        }
+        setIsResultsOpen(true);
+        return next > 250 && next < 900 ? next : prev;
+      });
+    };
+
+    const handleMouseUp = () => {
+      setIsResizingSummary(false);
+    };
+
+    if (isResizingSummary) {
+      document.addEventListener("mousemove", handleMouseMove);
+      document.addEventListener("mouseup", handleMouseUp);
+    }
+
+    return () => {
+      document.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, [isResizingSummary]);
 
   useEffect(() => {
     // If a new assistant message with tableData arrives, auto-open results
@@ -333,6 +424,27 @@ export default function ChatPage() {
     setEditingMessageId(null);
     setIsTyping(true);
 
+    // Resolve connection_id the same way handleSend does
+    let effectiveDb = selectedDb;
+    if (!effectiveDb && selectedProject) {
+      if (filteredDatabases && filteredDatabases.length > 0) {
+        effectiveDb = filteredDatabases[0].id;
+        setSelectedDb(filteredDatabases[0].id);
+      }
+    }
+
+    if (!effectiveDb) {
+      const warningMsg: Message = {
+        id: Date.now().toString(),
+        role: "assistant",
+        content: "Please select a database before regenerating.",
+        timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+      };
+      setMessages(prev => [...prev.slice(0, -1), warningMsg]);
+      setIsTyping(false);
+      return;
+    }
+
     try {
       const response = await fetch("http://localhost:8000/ask", {
         method: "POST",
@@ -341,7 +453,7 @@ export default function ChatPage() {
           question: finalValue,
           provider: provider,
           model: model,
-          connection_id: selectedDb
+          connection_id: effectiveDb
         }),
       });
 
@@ -357,7 +469,7 @@ export default function ChatPage() {
       };
 
       const currentIdx = updatedUserMsg.currentVersionIndex!;
-      updatedUserMsg.versions![currentIdx].response = {
+      (updatedUserMsg.versions![currentIdx] as any).response = {
         content: assistantMsg.content,
         sql: assistantMsg.sql,
         tableData: assistantMsg.tableData,
@@ -457,31 +569,78 @@ export default function ChatPage() {
     setHistory(newHistory);
   };
 
+  const getCanonicalMsgId = (msg: Message) => {
+    if (msg.role === "user") return msg.id;
+    const idx = messages.findIndex(m => m.id === msg.id);
+    if (idx > 0 && messages[idx - 1].role === "user") {
+      return messages[idx - 1].id;
+    }
+    return msg.id;
+  };
+
+  const isMessageFavorited = (msg: Message) => {
+    const canonicalId = getCanonicalMsgId(msg);
+    return savedQueryIds.has(canonicalId);
+  };
+
   const toggleFavoriteMessage = (msg: Message) => {
+    const canonicalId = getCanonicalMsgId(msg);
     const savedFavs = localStorage.getItem("favorite_queries");
     let favs = savedFavs ? JSON.parse(savedFavs) : [];
+    const isAlreadyFav = favs.some((f: any) => f.id === canonicalId);
 
-    const isAlreadyFav = favs.some((f: any) => f.id === msg.id);
-
+    let updatedFavs;
     if (isAlreadyFav) {
-      favs = favs.filter((f: any) => f.id !== msg.id);
+      updatedFavs = favs.filter((f: any) => f.id !== canonicalId);
+      setSavedQueryIds(prev => {
+        const next = new Set(prev);
+        next.delete(canonicalId);
+        return next;
+      });
     } else {
-      const userIdx = messages.findIndex(m => m.id === msg.id);
-      const assistantMsg = messages[userIdx + 1];
+      // Find the user message and assistant message
+      let userMsg = msg;
+      let assistantMsg = msg;
+      const idx = messages.findIndex(m => m.id === msg.id);
+      
+      if (msg.role === "user") {
+        userMsg = msg;
+        if (idx >= 0 && idx + 1 < messages.length) {
+          assistantMsg = messages[idx + 1];
+        }
+      } else {
+        if (idx > 0) {
+          userMsg = messages[idx - 1];
+        }
+        assistantMsg = msg;
+      }
+
+      const dbName = databases.find(db => db.id === selectedDb)?.name || "PostgreSQL";
 
       favs.push({
-        id: msg.id,
-        question: msg.content,
+        id: canonicalId,
+        question: userMsg.content,
         answer: assistantMsg?.content || "",
         sql: assistantMsg?.sql || "",
         tableData: assistantMsg?.tableData || null,
-        timestamp: msg.timestamp,
-        sessionId: currentSessionId
+        timestamp: userMsg.timestamp || Date.now(),
+        sessionId: currentSessionId,
+        database: dbName
+      });
+      updatedFavs = favs;
+      setSavedQueryIds(prev => {
+        const next = new Set(prev);
+        next.add(canonicalId);
+        return next;
       });
     }
 
-    localStorage.setItem("favorite_queries", JSON.stringify(favs));
+    localStorage.setItem("favorite_queries", JSON.stringify(updatedFavs));
     setMessages([...messages]);
+  };
+
+  const handleToggleSave = (msg: Message) => {
+    toggleFavoriteMessage(msg);
   };
 
   const handleRenameSession = (sessionId: string, newTitle: string) => {
@@ -497,9 +656,11 @@ export default function ChatPage() {
       const data = await response.json();
       if (Array.isArray(data)) {
         setDatabases(data);
-        if (data.length > 0) {
-          const defaultDb = data.find((db: any) => db.is_default) || data[0];
-          setSelectedDb(defaultDb.id);
+        const connectedDbs = data.filter((db: any) => db.is_default);
+        if (connectedDbs.length > 0) {
+          setSelectedDb(connectedDbs[0].id);
+        } else {
+          setSelectedDb("");
         }
       } else {
         setDatabases([]);
@@ -511,14 +672,64 @@ export default function ChatPage() {
 
   useEffect(() => {
     fetchDatabases();
+    try {
+      const savedProjects = localStorage.getItem("insight_projects");
+      if (savedProjects) {
+        const parsed = JSON.parse(savedProjects);
+        setProjects(parsed);
+        setSelectedProject("");
+      }
+    } catch (error) {
+      console.error("Error reading projects in chat mount:", error);
+    }
+    try {
+      const saved = localStorage.getItem("favorite_queries");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        setSavedQueryIds(new Set(parsed.map((item: any) => item.id)));
+      }
+    } catch (e) {
+      console.error("Error loading saved queries in chat mount:", e);
+    }
   }, []);
+
+  // Sync selectedDb whenever selectedProject, databases, or projects update
+  useEffect(() => {
+    if (selectedProject) {
+      const proj = projects.find(p => p.id === selectedProject);
+      if (proj && proj.databases && proj.databases.length > 0) {
+        const firstDb = databases.find(db => proj.databases.includes(db.id));
+        if (firstDb) {
+          setSelectedDb(firstDb.id);
+        } else {
+          setSelectedDb("");
+        }
+      } else {
+        setSelectedDb("");
+      }
+    } else {
+      setSelectedDb("");
+    }
+  }, [selectedProject, databases, projects]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
 
   useEffect(() => {
-    scrollToBottom();
+    const runMsgId = localStorage.getItem("insight_run_saved_query_msg_id");
+    if (runMsgId) {
+      setTimeout(() => {
+        const element = document.getElementById(`msg-${runMsgId}`);
+        if (element) {
+          element.scrollIntoView({ behavior: "smooth", block: "center" });
+          element.classList.add("animate-pulse-highlight");
+          localStorage.removeItem("insight_run_saved_query_msg_id");
+        }
+      }, 400);
+    } else {
+      scrollToBottom();
+    }
   }, [messages]);
 
   useEffect(() => {
@@ -628,11 +839,23 @@ export default function ChatPage() {
           : h
       ));
     }
-    if (!selectedDb) {
+    let effectiveDb = selectedDb;
+    
+    // Auto-resolve database from selected project if one is not explicitly selected
+    if (!effectiveDb && selectedProject) {
+      if (filteredDatabases && filteredDatabases.length > 0) {
+        effectiveDb = filteredDatabases[0].id;
+        setSelectedDb(filteredDatabases[0].id); // Auto-select it in the UI
+      }
+    }
+
+    if (!effectiveDb) {
       const warningMsg: Message = {
         id: (Date.now() + 1).toString(),
         role: "assistant",
-        content: "Please select a database from the header before asking a question.",
+        content: selectedProject 
+          ? "The selected project has no connected databases. Please add a database to the project or select one manually."
+          : "Please select a database or project from the header before asking a question.",
         timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
       };
       setMessages((prev) => [...prev, warningMsg]);
@@ -663,7 +886,7 @@ export default function ChatPage() {
           question: input,
           provider: provider,
           model: model,
-          connection_id: selectedDb
+          connection_id: effectiveDb
         }),
       });
 
@@ -732,32 +955,93 @@ export default function ChatPage() {
     }
   };
 
+  // Dynamic Results Logic for Right Panel
+  const resultsData = activeResult?.results;
+  const isResultsArray = Array.isArray(resultsData);
+  const hasResults = isResultsArray && resultsData.length > 0;
+  const firstRow = hasResults ? resultsData[0] : null;
+  const isObjectRow = firstRow !== null && typeof firstRow === 'object' && !Array.isArray(firstRow);
+  const resultColumns = isObjectRow ? Object.keys(firstRow) : [];
+  const useBullets = hasResults && (!isObjectRow || resultColumns.length === 1);
+  const useStatsCard = hasResults && isObjectRow && resultColumns.length === 1 && resultsData.length === 1;
+
   return (
     <div className="h-full flex overflow-hidden">
       <AnimatePresence mode="wait">
         {isHistoryOpen && (
           <motion.div
             initial={{ width: 0, opacity: 0 }}
-            animate={{ width: 256, opacity: 1 }}
+            animate={{ width: historyWidth, opacity: 1 }}
             exit={{ width: 0, opacity: 0 }}
             transition={{ duration: 0.3, ease: "easeInOut" }}
-            className="hidden xl:flex w-64 border-r flex-col bg-muted/20 overflow-hidden h-full"
+            className="hidden xl:flex border-r flex-col bg-muted/20 overflow-hidden h-full relative"
           >
-            <div className="p-4 flex items-center justify-between">
-              <h3 className="text-sm font-semibold">History</h3>
-              <div className="flex items-center gap-1">
-                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={handleNewChat}>
-                  <Plus className="h-3.5 w-3.5" />
-                </Button>
-                <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setIsHistoryOpen(false)}>
-                  <ChevronLeft className="h-3.5 w-3.5" />
-                </Button>
-              </div>
+            <div className="p-3.5 min-h-[57px] flex items-center justify-between transition-all duration-300">
+              {isHistorySearchOpen ? (
+                <div className="flex items-center gap-1.5 w-full relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                  <input
+                    autoFocus
+                    placeholder="Search history..."
+                    value={historySearchQuery}
+                    onChange={(e) => setHistorySearchQuery(e.target.value)}
+                    className="w-full bg-slate-900/50 border border-slate-800 text-xs rounded-xl h-8 pl-8 pr-7 outline-none focus:ring-1 focus:ring-indigo-500"
+                  />
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="absolute right-1 top-1/2 -translate-y-1/2 h-6 w-6 text-slate-400 hover:text-white"
+                    onClick={() => {
+                      setIsHistorySearchOpen(false);
+                      setHistorySearchQuery("");
+                    }}
+                  >
+                    <span className="text-sm font-bold">×</span>
+                  </Button>
+                </div>
+              ) : (
+                <>
+                  <h3 className="text-sm font-semibold">History</h3>
+                  <div className="flex items-center gap-0.5">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 text-slate-400 hover:text-white"
+                      title="Search History"
+                      onClick={() => setIsHistorySearchOpen(true)}
+                    >
+                      <Search className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 text-slate-400 hover:text-white"
+                      title="New Session"
+                      onClick={handleNewChat}
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 text-slate-400 hover:text-white"
+                      title="Close History Panel"
+                      onClick={() => setIsHistoryOpen(false)}
+                    >
+                      <ChevronLeft className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                </>
+              )}
             </div>
             <Separator />
             <ScrollArea className="flex-1 min-h-0">
               <div className="p-2 space-y-0.5">
-                {history.map((chat) => (
+                {history
+                  .filter((chat) =>
+                    chat.title.toLowerCase().includes(historySearchQuery.toLowerCase())
+                  )
+                  .map((chat) => (
                   <div
                     key={chat.id}
                     className={`group relative flex items-center rounded-lg transition-colors mb-0.5 ${chat.active ? "bg-accent" : "hover:bg-accent/50"}`}
@@ -815,8 +1099,8 @@ export default function ChatPage() {
                           <DropdownMenuItem
                             className="text-red-600 focus:text-red-600 focus:bg-red-50 dark:focus:bg-red-950/30"
                             onClick={(e) => {
-                              e.stopPropagation();
-                              deleteSession(e as unknown as React.MouseEvent, chat.id);
+                               e.stopPropagation();
+                               deleteSession(e as unknown as React.MouseEvent, chat.id);
                             }}
                           >
                             <Trash2 className="mr-2 h-3.5 w-3.5" />
@@ -832,6 +1116,13 @@ export default function ChatPage() {
                 View all chats →
               </button>
             </ScrollArea>
+            {/* Dynamic Drag Handle */}
+            <div
+              onMouseDown={startResizingHistory}
+              className={`absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-indigo-500/60 z-50 transition-all ${
+                isResizingHistory ? "bg-indigo-650 w-[3px] border-r-2 border-indigo-400" : "bg-transparent hover:w-1.5"
+              }`}
+            />
           </motion.div>
         )}
       </AnimatePresence>
@@ -859,7 +1150,7 @@ export default function ChatPage() {
           )}
         </AnimatePresence>
 
-        <div className="h-14 border-b flex items-center justify-between px-6 flex-shrink-0">
+        <div className="min-h-14 border-b flex flex-col md:flex-row md:items-center justify-between px-6 py-3 gap-3 flex-shrink-0 z-10 bg-slate-50 dark:bg-[var(--surface-0)]">
           <div className="flex items-center gap-3">
             {!isHistoryOpen && (
               <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setIsHistoryOpen(true)}>
@@ -868,17 +1159,17 @@ export default function ChatPage() {
             )}
             <h2 className="font-semibold text-sm">Chat</h2>
           </div>
-          <div className="flex items-center gap-4">
+          <div className="flex flex-wrap items-center gap-3 sm:gap-4 justify-start md:justify-end w-full md:w-auto">
             <div className="flex items-center gap-2 text-sm">
-              <Label htmlFor="provider-select" className="text-xs text-muted-foreground">
+              <Label htmlFor="provider-select" className="text-xs text-muted-foreground hidden lg:inline">
                 AI Provider:
               </Label>
               <Select value={provider} onValueChange={(val) => {
                 setProvider(val);
-                if (val === "gemini") setModel("gemini-1.5-pro");
+                if (val === "gemini") setModel("gemini-2.0-flash");
                 else if (val === "openai") setModel("gpt-4o");
                 else if (val === "anthropic") setModel("claude-3-5-sonnet");
-                else if (val === "deepseek") setModel("deepseek-v3");
+                else if (val === "deepseek") setModel("deepseek-v4-pro");
               }}>
                 <SelectTrigger className="h-8 w-32 text-xs">
                   <SelectValue placeholder="Provider" />
@@ -899,8 +1190,8 @@ export default function ChatPage() {
                 <SelectContent>
                   {provider === "gemini" && (
                     <>
-                      <SelectItem value="gemini-1.5-pro">Gemini 1.5 Pro</SelectItem>
-                      <SelectItem value="gemini-1.5-flash">Gemini 1.5 Flash</SelectItem>
+                      <SelectItem value="gemini-2.0-flash">Gemini 2.0 Flash</SelectItem>
+                      <SelectItem value="gemini-2.5-pro">Gemini 2.5 Pro</SelectItem>
                     </>
                   )}
                   {provider === "openai" && (
@@ -917,39 +1208,70 @@ export default function ChatPage() {
                   )}
                   {provider === "deepseek" && (
                     <>
-                      <SelectItem value="deepseek-v3">DeepSeek V3</SelectItem>
-                      <SelectItem value="deepseek-r1">DeepSeek R1</SelectItem>
+                      <SelectItem value="deepseek-v4-pro">DeepSeek V4 Pro</SelectItem>
+                      <SelectItem value="deepseek-v4-flash">DeepSeek V4 Flash</SelectItem>
                     </>
                   )}
                 </SelectContent>
               </Select>
             </div>
-            <Separator orientation="vertical" className="h-6" />
             <div className="flex items-center gap-2 text-sm">
-              <Label htmlFor="db-select" className="text-xs text-muted-foreground">
-                Database:
+              <Label htmlFor="project-select" className="text-xs text-muted-foreground hidden lg:inline">
+                Project:
               </Label>
-              <Select value={selectedDb} onValueChange={setSelectedDb}>
-                <SelectTrigger className="h-8 w-52 text-xs">
-                  <SelectValue placeholder="Select Database">
-                    {databases.find(db => db.id === selectedDb)?.name || "Select Database"}
+              <Select value={selectedProject} onValueChange={setSelectedProject}>
+                <SelectTrigger className="h-8 w-44 text-xs">
+                  <SelectValue placeholder="Select Project">
+                    {projects.find(p => p.id === selectedProject)?.title || "Select Project"}
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
-                  {databases.map((db) => (
-                    <SelectItem key={db.id} value={db.id}>
-                      {db.type === 'postgresql' ? '🐘' : db.type === 'mysql' ? '🐬' : '🪶'} {db.name}
+                  <SelectItem value="">🌐 Select Project</SelectItem>
+                  {projects.filter((p: any) => p.status === "Active" || !p.status).map((proj) => (
+                    <SelectItem key={proj.id} value={proj.id}>
+                      📂 {proj.title}
                     </SelectItem>
                   ))}
-                  {databases.length === 0 && (
-                    <SelectItem value="none" disabled>No databases connected</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex items-center gap-2 text-sm">
+              <Label htmlFor="db-select" className="text-xs text-muted-foreground hidden lg:inline">
+                Database:
+              </Label>
+              <Select value={selectedDb} onValueChange={setSelectedDb}>
+                <SelectTrigger className="h-8 w-44 text-xs">
+                  <SelectValue placeholder="Select Database">
+                    {selectedDb ? (
+                      <span className="flex items-center gap-1.5">
+                        <span className="text-emerald-500 font-black">✓</span>
+                        <span>{databases.find(db => db.id === selectedDb)?.name || "Select Database"}</span>
+                      </span>
+                    ) : (
+                      "Select Database"
+                    )}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  {filteredDatabases.map((db) => (
+                    <SelectItem key={db.id} value={db.id}>
+                      <span className="flex items-center justify-between w-full gap-4">
+                        <span className="flex items-center gap-1.5">
+                          <span>{db.type === 'postgresql' ? '🐘' : db.type === 'mysql' ? '🐬' : db.type === 'mongodb' ? '🍃' : '🪶'}</span>
+                          <span>{db.name}</span>
+                        </span>
+                        <span className="text-emerald-500 font-black text-xs ml-auto">✓</span>
+                      </span>
+                    </SelectItem>
+                  ))}
+                  {filteredDatabases.length === 0 && (
+                    <SelectItem value="none" disabled>No connected databases</SelectItem>
                   )}
                 </SelectContent>
               </Select>
             </div>
-            <Separator orientation="vertical" className="h-6" />
             <div className="flex items-center gap-2">
-              <Label htmlFor="show-sql" className="text-xs text-muted-foreground">
+              <Label htmlFor="show-sql" className="text-xs text-muted-foreground hidden sm:inline">
                 Show Generated SQL
               </Label>
               <Switch
@@ -1056,23 +1378,14 @@ export default function ChatPage() {
                         </button>
                         <button
                           onClick={() => toggleFavoriteMessage(msg)}
-                          className={`p-1 hover:bg-muted rounded transition-colors ${(() => {
-                              const favs = JSON.parse(localStorage.getItem("favorite_queries") || "[]");
-                              return favs.some((f: any) => f.id === msg.id);
-                            })()
+                          className={`p-1 hover:bg-muted rounded transition-colors ${
+                            isMessageFavorited(msg)
                               ? "text-amber-500 hover:text-amber-600"
                               : "text-muted-foreground hover:text-amber-500"
-                            }`}
-                          title={(() => {
-                            const favs = JSON.parse(localStorage.getItem("favorite_queries") || "[]");
-                            return favs.some((f: any) => f.id === msg.id);
-                          })() ? "Remove from Favorite Queries" : "Save as Favorite Query"}
+                          }`}
+                          title={isMessageFavorited(msg) ? "Remove from Favourite" : "Save as Favourite"}
                         >
-                          <Star className={`h-3.5 w-3.5 ${(() => {
-                              const favs = JSON.parse(localStorage.getItem("favorite_queries") || "[]");
-                              return favs.some((f: any) => f.id === msg.id);
-                            })() ? "fill-current" : ""
-                            }`} />
+                          <Star className={`h-3.5 w-3.5 ${isMessageFavorited(msg) ? "fill-current" : ""}`} />
                         </button>
                       </div>
                     </div>
@@ -1099,6 +1412,20 @@ export default function ChatPage() {
                               SQL
                             </TabsTrigger>
                             <div className="flex-1" />
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className={`h-7 text-[10px] gap-1.5 px-2.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-850 transition-colors ${
+                                isMessageFavorited(msg)
+                                  ? "text-indigo-500 font-black bg-indigo-500/10 hover:bg-indigo-500/15"
+                                  : "text-muted-foreground hover:text-slate-900 dark:hover:text-white"
+                              }`}
+                              onClick={() => handleToggleSave(msg)}
+                              title={isMessageFavorited(msg) ? "Saved to Queries" : "Save Query"}
+                            >
+                              <Bookmark className={`h-3.5 w-3.5 ${isMessageFavorited(msg) ? "fill-current" : ""}`} />
+                              {isMessageFavorited(msg) ? "Saved" : "Save"}
+                            </Button>
                             <Button
                               variant="ghost"
                               size="sm"
@@ -1184,6 +1511,67 @@ export default function ChatPage() {
                 </motion.div>
               ))}
             </AnimatePresence>
+
+            {messages.length === 0 && (
+              <div className="flex flex-col items-center justify-center min-h-[50vh] text-center px-4 py-8">
+                {databases.filter(db => db.is_default).length === 0 ? (
+                  /* Case 1: No connected databases */
+                  <motion.div 
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="max-w-md p-8 rounded-3xl bg-slate-900/40 border border-slate-800 shadow-2xl flex flex-col items-center"
+                  >
+                    <div className="h-16 w-16 rounded-2xl bg-indigo-500/10 flex items-center justify-center text-indigo-400 mb-6 border border-indigo-500/20">
+                      <Database className="h-8 w-8" />
+                    </div>
+                    <h3 className="text-xl font-bold text-white mb-3">No Connected Databases</h3>
+                    <p className="text-sm text-slate-400 mb-6 leading-relaxed">
+                      You need to connect and activate at least one database to start chatting with AI.
+                    </p>
+                    <Link href="/dashboard/databases">
+                      <Button className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold h-11 px-8 rounded-xl shadow-lg shadow-indigo-600/20 cursor-pointer flex items-center gap-2">
+                        Connect Database <ArrowRight className="h-4 w-4" />
+                      </Button>
+                    </Link>
+                  </motion.div>
+                ) : (
+                  /* Case 2: Welcoming screen with active database selector hint */
+                  <motion.div 
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="max-w-2xl flex flex-col items-center"
+                  >
+                    <div className="h-16 w-16 rounded-[24px] bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white mb-6 shadow-xl shadow-indigo-500/10">
+                      <Sparkles className="h-8 w-8" />
+                    </div>
+                    <h2 className="text-3xl font-black tracking-tight text-white mb-3">
+                      Chat with Your Data
+                    </h2>
+                    <p className="text-sm text-slate-400 max-w-md mb-8 leading-relaxed">
+                      Ask natural language questions to generate SQL queries and visualize your tables instantly.
+                    </p>
+                    
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 w-full text-left">
+                      <div className="p-5 rounded-2xl bg-slate-900/30 border border-slate-800/80 hover:border-slate-700 transition-colors">
+                        <div className="h-8 w-8 rounded-lg bg-indigo-500/10 flex items-center justify-center text-indigo-400 mb-3 font-bold text-sm">1</div>
+                        <h4 className="text-sm font-bold text-white mb-1">Select Database</h4>
+                        <p className="text-xs text-slate-400 leading-relaxed">
+                          Choose an active connection from the dropdown in the header.
+                        </p>
+                      </div>
+                      <div className="p-5 rounded-2xl bg-slate-900/30 border border-slate-800/80 hover:border-slate-700 transition-colors">
+                        <div className="h-8 w-8 rounded-lg bg-indigo-500/10 flex items-center justify-center text-indigo-400 mb-3 font-bold text-sm">2</div>
+                        <h4 className="text-sm font-bold text-white mb-1">Ask Anything</h4>
+                        <p className="text-xs text-slate-400 leading-relaxed">
+                          Type queries like "Show the top 5 products by revenue" or "Analyze active users".
+                        </p>
+                      </div>
+                    </div>
+                  </motion.div>
+                )}
+              </div>
+            )}
+
             {isTyping && (
               <div className="flex items-start gap-3 animate-pulse">
                 <Avatar className="h-10 w-10 rounded-2xl border-2 border-indigo-600/20">
@@ -1267,10 +1655,17 @@ export default function ChatPage() {
         {isResultsOpen && activeResult && (
           <motion.div
             initial={{ width: 0, opacity: 0 }}
-            animate={{ width: "45%", opacity: 1 }}
+            animate={{ width: summaryWidth, opacity: 1 }}
             exit={{ width: 0, opacity: 0 }}
             className="border-l border-slate-900/50 bg-[var(--surface-0)] h-full overflow-hidden flex-shrink-0 flex flex-col relative z-20 shadow-2xl"
           >
+            {/* Dynamic Drag Handle */}
+            <div
+              onMouseDown={startResizingSummary}
+              className={`absolute left-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-indigo-500/60 z-50 transition-all ${
+                isResizingSummary ? "bg-indigo-650 w-[3px] border-l-2 border-indigo-400" : "bg-transparent hover:w-1.5"
+              }`}
+            />
             <div className="flex-1 overflow-auto p-8 space-y-10">
               {/* Header */}
               <div className="flex items-center justify-between">
@@ -1291,172 +1686,92 @@ export default function ChatPage() {
                 </div>
               </div>
 
-              {/* Main Summary Card (Gradient Style) */}
-              <Card className="bg-gradient-to-br from-indigo-900/40 via-purple-900/40 to-indigo-900/40 border border-indigo-500/20 shadow-2xl overflow-hidden rounded-[32px] relative group border-none">
-                <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-20 pointer-events-none" />
-                <CardContent className="p-8">
-                  <div className="flex items-center gap-6 relative z-10">
-                    <div className="h-16 w-16 rounded-[28px] bg-white/10 backdrop-blur-xl flex items-center justify-center shadow-2xl border border-white/20">
-                      <ShoppingCart className="h-8 w-8 text-white" />
-                    </div>
-                    <div className="flex-1">
-                      <p className="text-sm font-bold text-indigo-300 uppercase tracking-widest mb-1">You received</p>
-                      <div className="flex items-baseline gap-4">
-                        <span className="text-5xl font-black tracking-tight text-white">250</span>
-                        <div className="flex flex-col">
-                          <Badge className="bg-emerald-500/20 text-emerald-400 border-none text-[11px] px-2 py-0.5 font-black rounded-lg">
-                            <ArrowUpRight className="h-3 w-3 mr-1" /> 12.5%
-                          </Badge>
-                          <span className="text-[10px] text-slate-400 font-bold mt-1 uppercase tracking-wider">vs last week</span>
-                        </div>
-                      </div>
-                      <p className="text-sm text-indigo-200/60 mt-2 font-bold uppercase tracking-widest">orders this week</p>
-                    </div>
+              {/* Dynamic Results Display */}
+              {!hasResults ? (
+                <div className="flex flex-col items-center justify-center h-full text-slate-500 space-y-6 pt-20">
+                  <div className="h-24 w-24 rounded-full bg-slate-900/30 flex items-center justify-center border border-slate-800 shadow-inner">
+                    <Database className="h-10 w-10 opacity-40 text-slate-400" />
                   </div>
-                  {/* Decorative chart line placeholder */}
-                  <div className="absolute bottom-0 right-0 w-1/2 h-full opacity-30 pointer-events-none overflow-hidden">
-                    <svg viewBox="0 0 100 100" className="w-full h-full stroke-indigo-400 stroke-[0.5] fill-none translate-y-10">
-                      <path d="M0,80 Q25,20 50,70 T100,30" strokeLinecap="round" />
-                    </svg>
+                  <div className="text-center space-y-2">
+                    <h3 className="text-lg font-black text-white">No Tabular Data</h3>
+                    <p className="text-sm max-w-xs leading-relaxed">The selected response does not contain any structured database results to visualize.</p>
                   </div>
-                </CardContent>
-              </Card>
-
-              {/* Visualization Grid */}
-              <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-                <Card className="p-6 bg-[var(--surface-1)] border-slate-900/50 shadow-2xl rounded-[28px] flex flex-col border-none">
-                  <div className="flex items-center justify-between mb-8">
-                    <h3 className="text-xs font-black uppercase tracking-[0.15em] text-white">Orders Over Time</h3>
-                    <Select defaultValue="week">
-                      <SelectTrigger className="h-7 w-24 text-[10px] bg-[var(--surface-2)] border-slate-800 rounded-lg font-bold uppercase">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent className="bg-[var(--surface-2)] border-slate-800 text-white">
-                        <SelectItem value="week">This Week</SelectItem>
-                        <SelectItem value="month">This Month</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="h-44 flex items-end justify-between gap-3 px-2">
-                    {[35, 60, 45, 90, 65, 55, 40].map((h, i) => (
-                      <div key={i} className="flex-1 flex flex-col items-center gap-3 h-full group">
-                        <div className="flex-1 w-full bg-slate-900/30 rounded-full relative overflow-hidden h-full border border-white/5 transition-all group-hover:border-indigo-500/30">
-                          <motion.div
-                            initial={{ height: 0 }}
-                            animate={{ height: `${h}%` }}
-                            className="absolute bottom-0 w-full bg-gradient-to-t from-indigo-600 via-indigo-500 to-purple-500 rounded-full shadow-[0_0_20px_rgba(99,102,241,0.2)]"
-                          />
-                        </div>
-                        <span className="text-[10px] font-black text-slate-600 uppercase tracking-tighter">
-                          {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][i].substring(0, 3)}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </Card>
-                <Card className="p-6 bg-[var(--surface-1)] border-slate-900/50 shadow-2xl rounded-[28px] flex flex-col border-none">
-                  <div className="flex items-center justify-between mb-8">
-                    <h3 className="text-xs font-black uppercase tracking-[0.15em] text-white">Orders by Status</h3>
-                    <MoreHorizontal className="h-4 w-4 text-slate-600" />
-                  </div>
-                  <div className="flex-1 flex flex-col sm:flex-row items-center justify-center gap-6">
-                    <div className="relative w-36 h-36 flex-shrink-0">
-                      <svg viewBox="0 0 100 100" className="w-full h-full -rotate-90">
-                        <circle cx="50" cy="50" r="40" fill="none" stroke="var(--surface-2)" strokeWidth="14" />
-                        <circle cx="50" cy="50" r="40" fill="none" stroke="#f87171" strokeWidth="14" strokeDasharray="40 251.2" strokeLinecap="round" />
-                        <circle cx="50" cy="50" r="40" fill="none" stroke="#10b981" strokeWidth="14" strokeDasharray="160 251.2" strokeDashoffset="-40" strokeLinecap="round" />
-                        <circle cx="50" cy="50" r="40" fill="none" stroke="#3b82f6" strokeWidth="14" strokeDasharray="50 251.2" strokeDashoffset="-200" strokeLinecap="round" />
-                        <circle cx="50" cy="50" r="40" fill="none" stroke="#facc15" strokeWidth="14" strokeDasharray="30 251.2" strokeDashoffset="-250" strokeLinecap="round" />
-                      </svg>
-                      <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
-                        <span className="text-xl font-black text-white leading-none">250</span>
-                        <span className="text-[9px] font-black text-slate-500 uppercase tracking-widest mt-1">Total</span>
-                      </div>
-                    </div>
-                    {/* Compact Legend */}
-                    <div className="space-y-2.5">
-                      {[
-                        { label: "Completed", color: "bg-emerald-500", val: "160 (64%)" },
-                        { label: "Processing", color: "bg-blue-500", val: "50 (20%)" },
-                        { label: "Pending", color: "bg-amber-400", val: "30 (12%)" },
-                        { label: "Cancelled", color: "bg-rose-500", val: "10 (4%)" },
-                      ].map((item, i) => (
-                        <div key={i} className="flex items-center gap-3">
-                          <div className={`h-2 w-2 rounded-full flex-shrink-0 ${item.color} shadow-[0_0_8px_currentColor]`} />
-                          <div className="flex flex-col">
-                            <span className="text-[10px] font-black text-white leading-none tracking-tight">{item.label}</span>
-                            <span className="text-[8px] font-bold text-slate-500 mt-0.5">{item.val}</span>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </Card>
-              </div>
-
-              {/* Enhanced Orders Table */}
-              <Card className="bg-[var(--surface-1)] border-slate-900/50 shadow-2xl rounded-[28px] overflow-hidden border-none">
-                <div className="flex items-center justify-between px-8 py-5 border-b border-slate-800/50">
-                  <h3 className="text-sm font-black text-white uppercase tracking-widest">Orders</h3>
-                  <Button variant="ghost" size="sm" className="h-8 text-[11px] font-black gap-2 px-4 text-slate-400 hover:text-white bg-[var(--surface-2)] border border-slate-800 rounded-xl">
-                    <Download className="h-4 w-4" />
-                    Export
-                  </Button>
                 </div>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-xs">
-                    <thead>
-                      <tr className="bg-slate-900/20 text-slate-500 uppercase tracking-[0.15em] text-[10px] font-black">
-                        <th className="text-left px-8 py-5">Order ID</th>
-                        <th className="text-left px-8 py-5">Customer</th>
-                        <th className="text-left px-8 py-5">Status</th>
-                        <th className="text-left px-8 py-5">Total Amount</th>
-                        <th className="text-left px-8 py-5 whitespace-nowrap">Created At</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-800/30">
-                      {[
-                        { id: "#ORD-10250", name: "Alice Johnson", status: "Completed", amount: "$125.00", date: "May 18, 2025 09:15 AM", color: "text-emerald-400 bg-emerald-500/10" },
-                        { id: "#ORD-10249", name: "Bob Smith", status: "Processing", amount: "$89.99", date: "May 18, 2025 08:47 AM", color: "text-blue-400 bg-blue-500/10" },
-                        { id: "#ORD-10248", name: "Carol Williams", status: "Completed", amount: "$210.00", date: "May 18, 2025 08:31 AM", color: "text-emerald-400 bg-emerald-500/10" },
-                        { id: "#ORD-10247", name: "David Brown", status: "Pending", amount: "$75.50", date: "May 18, 2025 07:58 AM", color: "text-amber-400 bg-amber-500/10" },
-                        { id: "#ORD-10246", name: "Eva Davis", status: "Cancelled", amount: "$49.99", date: "May 18, 2025 07:22 AM", color: "text-rose-400 bg-rose-500/10" },
-                      ].map((row, i) => (
-                        <tr key={i} className="hover:bg-white/5 transition-colors cursor-pointer group">
-                          <td className="px-8 py-5 text-white font-bold tracking-tight">{row.id}</td>
-                          <td className="px-8 py-5 text-slate-300 font-medium">{row.name}</td>
-                          <td className="px-8 py-5">
-                            <Badge className={`border-none font-black text-[9px] uppercase tracking-wider px-2 py-0.5 rounded-lg ${row.color}`}>
-                              {row.status}
-                            </Badge>
-                          </td>
-                          <td className="px-8 py-5 text-white font-black">{row.amount}</td>
-                          <td className="px-8 py-5 text-slate-500 font-bold tabular-nums">{row.date}</td>
+              ) : useStatsCard ? (
+                <Card className="bg-gradient-to-br from-indigo-900/40 via-purple-900/40 to-indigo-900/40 border border-indigo-500/20 shadow-2xl overflow-hidden rounded-[32px] relative group border-none">
+                  <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-20 pointer-events-none" />
+                  <CardContent className="p-8">
+                    <div className="flex items-center gap-6 relative z-10">
+                      <div className="h-16 w-16 rounded-[28px] bg-white/10 backdrop-blur-xl flex items-center justify-center shadow-2xl border border-white/20">
+                        <Sparkles className="h-8 w-8 text-white" />
+                      </div>
+                      <div className="flex-1 overflow-hidden">
+                        <p className="text-sm font-bold text-indigo-300 uppercase tracking-widest mb-1 truncate" title={resultColumns[0]}>{resultColumns[0]}</p>
+                        <div className="flex items-baseline gap-4">
+                          <span className="text-5xl font-black tracking-tight text-white truncate max-w-full" title={String(resultsData[0][resultColumns[0]])}>
+                            {String(resultsData[0][resultColumns[0]])}
+                          </span>
+                        </div>
+                        <p className="text-sm text-indigo-200/60 mt-2 font-bold uppercase tracking-widest">Aggregated Result</p>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              ) : useBullets ? (
+                <Card className="p-8 bg-[var(--surface-1)] border-slate-900/50 shadow-2xl rounded-[28px] border-none">
+                  <h3 className="text-sm font-black text-white uppercase tracking-widest mb-6 border-b border-slate-800/50 pb-4">
+                    {isObjectRow ? resultColumns[0] : "Items"} List
+                  </h3>
+                  <ul className="space-y-4 max-h-[60vh] overflow-y-auto pr-4 custom-scrollbar">
+                    {resultsData.map((row: any, i: number) => {
+                      const val = isObjectRow ? row[resultColumns[0]] : row;
+                      return (
+                        <li key={i} className="flex items-center gap-4 text-sm text-slate-300 font-medium p-3 bg-slate-900/30 rounded-xl border border-white/5 hover:border-indigo-500/30 transition-colors">
+                          <div className="h-2 w-2 rounded-full bg-indigo-500 shadow-[0_0_8px_var(--color-indigo-500)] flex-shrink-0" />
+                          <span className="break-all">{String(val)}</span>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </Card>
+              ) : (
+                <Card className="bg-[var(--surface-1)] border-slate-900/50 shadow-2xl rounded-[28px] overflow-hidden border-none flex flex-col h-full max-h-[80vh]">
+                  <div className="flex items-center justify-between px-8 py-5 border-b border-slate-800/50 flex-shrink-0">
+                    <h3 className="text-sm font-black text-white uppercase tracking-widest">Query Results</h3>
+                    <Button variant="ghost" size="sm" className="h-8 text-[11px] font-black gap-2 px-4 text-slate-400 hover:text-white bg-[var(--surface-2)] border border-slate-800 rounded-xl">
+                      <Download className="h-4 w-4" />
+                      Export
+                    </Button>
+                  </div>
+                  <div className="overflow-x-auto flex-1 custom-scrollbar">
+                    <table className="w-full text-xs">
+                      <thead className="sticky top-0 bg-[var(--surface-1)] z-10 shadow-sm shadow-black/20">
+                        <tr className="bg-slate-900/20 text-slate-500 uppercase tracking-[0.15em] text-[10px] font-black">
+                          {resultColumns.map((col, i) => (
+                            <th key={i} className="text-left px-8 py-5 whitespace-nowrap">{col}</th>
+                          ))}
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-                {/* Pagination */}
-                <div className="flex items-center justify-between px-8 py-6 border-t border-slate-800/50">
-                  <span className="text-[11px] text-slate-500 font-black uppercase tracking-wider">Showing 1 to 7 of 250 orders</span>
-                  <div className="flex items-center gap-1.5">
-                    <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-600 hover:text-white bg-[var(--surface-2)] rounded-lg">
-                      <ChevronLeft className="h-4 w-4" />
-                    </Button>
-                    <div className="flex items-center gap-1 mx-2">
-                      <Button size="sm" className="h-8 w-8 bg-indigo-600 text-white font-black text-xs rounded-lg">1</Button>
-                      <Button variant="ghost" size="sm" className="h-8 w-8 text-slate-500 hover:text-white font-black text-xs">2</Button>
-                      <Button variant="ghost" size="sm" className="h-8 w-8 text-slate-500 hover:text-white font-black text-xs">3</Button>
-                      <span className="text-slate-700 px-1">...</span>
-                      <Button variant="ghost" size="sm" className="h-8 w-8 text-slate-500 hover:text-white font-black text-xs">36</Button>
-                    </div>
-                    <Button variant="ghost" size="icon" className="h-8 w-8 text-slate-600 hover:text-white bg-[var(--surface-2)] rounded-lg">
-                      <ChevronRight className="h-4 w-4" />
-                    </Button>
+                      </thead>
+                      <tbody className="divide-y divide-slate-800/30">
+                        {resultsData.map((row: any, i: number) => (
+                          <tr key={i} className="hover:bg-white/5 transition-colors cursor-pointer group">
+                            {resultColumns.map((col, j) => (
+                              <td key={j} className="px-8 py-5 text-slate-300 font-medium whitespace-nowrap max-w-[300px] truncate" title={String(row[col])}>
+                                {String(row[col])}
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   </div>
-                </div>
-              </Card>
+                  <div className="flex items-center justify-between px-8 py-6 border-t border-slate-800/50 flex-shrink-0 bg-slate-900/10">
+                    <span className="text-[11px] text-slate-500 font-black uppercase tracking-wider">
+                      Showing {resultsData.length} records
+                    </span>
+                  </div>
+                </Card>
+              )}
             </div>
           </motion.div>
         )}

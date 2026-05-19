@@ -13,7 +13,7 @@ class SuggestionRequest(BaseModel):
     connection_id: Optional[str] = None
     database: Optional[str] = None
     provider: str = "gemini"
-    model: str = "gemini-1.5-pro"
+    model: str = "gemini-2.0-flash"
 
 load_dotenv()
 
@@ -83,11 +83,11 @@ def init_components():
 init_components()
 
 @app.get("/databases")
-async def get_databases():
+def get_databases():
     return connection_manager.list_connections()
 
 @app.post("/databases/test")
-async def test_database_connection(request: ConnectionRequest):
+def test_database_connection(request: ConnectionRequest):
     try:
         from connection_manager import ConnectionManager
         cm = ConnectionManager()
@@ -119,7 +119,7 @@ async def test_database_connection(request: ConnectionRequest):
         return {"status": "error", "message": f"Connection Failed: {str(e)}"}
 
 @app.post("/databases")
-async def add_database(request: ConnectionRequest):
+def add_database(request: ConnectionRequest):
     try:
         conn = connection_manager.add_connection(request.dict())
         return conn
@@ -127,12 +127,12 @@ async def add_database(request: ConnectionRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.delete("/databases/{conn_id}")
-async def delete_database(conn_id: str):
+def delete_database(conn_id: str):
     connection_manager.delete_connection(conn_id)
     return {"status": "deleted"}
 
 @app.put("/databases/{conn_id}")
-async def update_database(conn_id: str, request: ConnectionRequest):
+def update_database(conn_id: str, request: ConnectionRequest):
     try:
         connections = connection_manager._load()
         updated = False
@@ -152,32 +152,22 @@ async def update_database(conn_id: str, request: ConnectionRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.put("/databases/{conn_id}/default")
-async def set_default_database(conn_id: str):
+def set_default_database(conn_id: str):
     try:
         connections = connection_manager._load()
+        current_status = False
         for c in connections:
             if c['id'] == conn_id:
-                # Toggle the current one
                 c['is_default'] = not c.get('is_default', False)
-            else:
-                # Ensure all others are false if we turned one ON
-                # But if we turned one OFF, others should stay false
-                pass
-        
-        # If we just turned one ON, we MUST turn all others OFF
-        current_status = next((c.get('is_default', False) for c in connections if c['id'] == conn_id), False)
-        if current_status:
-            for c in connections:
-                if c['id'] != conn_id:
-                    c['is_default'] = False
-                    
+                current_status = c['is_default']
+                break
         connection_manager._save(connections)
         return {"status": "success", "is_default": current_status}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.post("/ask")
-async def ask_question(request: QueryRequest):
+def ask_question(request: QueryRequest):
     print(f"Received question: {request.question} for connection: {request.connection_id}")
     global db_manager
     
@@ -257,7 +247,7 @@ async def ask_question(request: QueryRequest):
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
 @app.post("/suggest")
-async def suggest_questions(request: SuggestionRequest):
+def suggest_questions(request: SuggestionRequest):
     global db_manager
     current_db_manager = db_manager
     conn = None
@@ -299,11 +289,11 @@ async def suggest_questions(request: SuggestionRequest):
         return []
 
 @app.post("/summarize")
-async def summarize_chat(request: dict):
+def summarize_chat(request: dict):
     question = request.get("question")
     response_text = request.get("response")
     provider = request.get("provider", "gemini")
-    model = request.get("model", "gemini-1.5-pro")
+    model = request.get("model", "gemini-2.0-flash")
     
     if not question or not response_text or not sql_agent:
         return {"title": "New Chat"}
@@ -316,7 +306,7 @@ async def summarize_chat(request: dict):
         return {"title": question[:30] + "..." if len(question) > 30 else question}
 
 @app.get("/health")
-async def health_check():
+def health_check():
     return {"status": "healthy"}
 
 if __name__ == "__main__":
