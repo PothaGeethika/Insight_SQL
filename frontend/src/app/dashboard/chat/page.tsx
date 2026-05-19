@@ -43,6 +43,8 @@ import {
   CheckCircle2,
   AlertCircle,
   ArrowLeft,
+  Camera,
+  Video,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import {
@@ -142,9 +144,26 @@ export default function ChatPage() {
   const [databases, setDatabases] = useState<any[]>([]);
   const [selectedDb, setSelectedDb] = useState<string>("");
   const [selectedDbs, setSelectedDbs] = useState<string[]>([]);
+  const [attachedFile, setAttachedFile] = useState<File | null>(null);
+  const [filePreviewUrl, setFilePreviewUrl] = useState<string | null>(null);
+  const [isCameraOpen, setIsCameraOpen] = useState(false);
+  const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  useEffect(() => {
+    if (!attachedFile) {
+      setFilePreviewUrl(null);
+      return;
+    }
+    if (attachedFile.type.startsWith("image/")) {
+      const url = URL.createObjectURL(attachedFile);
+      setFilePreviewUrl(url);
+      return () => URL.revokeObjectURL(url);
+    }
+  }, [attachedFile]);
   const [projects, setProjects] = useState<any[]>([]);
   const [selectedProject, setSelectedProject] = useState<string>("");
-  const [history, setHistory] = useState<{ id: string; title: string; active: boolean; messages: Message[]; isFavorite?: boolean }[]>([]);
+  const [history, setHistory] = useState<{ id: string; title: string; active: boolean; messages: Message[]; isFavorite?: boolean; updatedAt?: number }[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [isHistoryOpen, setIsHistoryOpen] = useState(true);
   const [isHistorySearchOpen, setIsHistorySearchOpen] = useState(false);
@@ -525,16 +544,54 @@ export default function ChatPage() {
     fileInputRef.current?.click();
   };
 
+  const startCamera = async () => {
+    try {
+      setIsCameraOpen(true);
+      setTimeout(async () => {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } });
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+        }
+        setCameraStream(stream);
+      }, 100);
+    } catch (err) {
+      console.error("Error accessing camera:", err);
+      alert("Could not access camera. Please check your camera permissions.");
+      setIsCameraOpen(false);
+    }
+  };
+
+  const stopCamera = () => {
+    if (cameraStream) {
+      cameraStream.getTracks().forEach(track => track.stop());
+      setCameraStream(null);
+    }
+    setIsCameraOpen(false);
+  };
+
+  const captureSnapshot = () => {
+    if (videoRef.current) {
+      const canvas = document.createElement("canvas");
+      canvas.width = videoRef.current.videoWidth || 640;
+      canvas.height = videoRef.current.videoHeight || 480;
+      const ctx = canvas.getContext("2d");
+      if (ctx) {
+        ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
+        canvas.toBlob((blob) => {
+          if (blob) {
+            const capturedFile = new File([blob], `camera_snapshot_${Date.now()}.png`, { type: "image/png" });
+            setAttachedFile(capturedFile);
+          }
+        }, "image/png");
+      }
+      stopCamera();
+    }
+  };
+
   const onFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      const msg: Message = {
-        id: Date.now().toString(),
-        role: "user",
-        content: `Attached file: ${file.name}`,
-        timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-      };
-      setMessages(prev => [...prev, msg]);
+      setAttachedFile(file);
     }
   };
 
@@ -1092,36 +1149,73 @@ export default function ChatPage() {
   };
 
   const handleSend = async () => {
-    if (!input.trim()) return;
+    if (!input.trim() && !attachedFile) return;
+
+    const fileSuffix = attachedFile ? `\n\n📎 Attached File: ${attachedFile.name}` : "";
+    const finalContent = input + fileSuffix;
 
     const userMsg: Message = {
       id: Date.now().toString(),
       role: "user",
-      content: input,
+      content: finalContent,
       timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
     };
 
     const newMessages = [...messages, userMsg];
     setMessages(newMessages);
     setInput("");
+    setAttachedFile(null);
 
     let updatedSessionId = currentSessionId;
     if (!currentSessionId) {
       updatedSessionId = userMsg.id;
       setCurrentSessionId(updatedSessionId);
+      const generateSummaryTitle = (text: string, file: File | null) => {
+        if (!text.trim() && file) return `Attached: ${file.name}`;
+        
+        const clean = text.trim();
+        let titleStr = clean;
+        
+        // Remove common conversational fillers at the very beginning of the prompt
+        const fillerPrefixes = [
+          "can you tell me ", "can you show me ", "please show me ", "could you show me ",
+          "i want to see ", "show me ", "tell me ", "give me ", "could you tell me "
+        ];
+        
+        for (const prefix of fillerPrefixes) {
+          if (titleStr.toLowerCase().startsWith(prefix)) {
+            titleStr = titleStr.substring(prefix.length).trim();
+            break;
+          }
+        }
+        
+        const titleWords = titleStr.split(/\s+/);
+        
+        // If the remaining prompt is short enough, use the whole thing
+        if (titleWords.length <= 5 && titleStr.length < 40) {
+          return titleStr.charAt(0).toUpperCase() + titleStr.slice(1);
+        }
+        
+        // Otherwise, take the first 5 words to form a natural, grammatically correct phrase
+        const summary = titleWords.slice(0, 5).join(' ');
+        return summary.charAt(0).toUpperCase() + summary.slice(1) + "...";
+      };
+      
+      const displayTitle = generateSummaryTitle(input, attachedFile);
       setHistory(prev => [
         {
           id: updatedSessionId!,
-          title: input.substring(0, 30) + (input.length > 30 ? "..." : ""),
+          title: displayTitle,
           active: true,
-          messages: newMessages
+          messages: newMessages,
+          updatedAt: Date.now()
         },
         ...prev.map(h => ({ ...h, active: false }))
       ]);
     } else {
       setHistory(prev => prev.map(h =>
         h.id === currentSessionId
-          ? { ...h, messages: newMessages }
+          ? { ...h, messages: newMessages, updatedAt: Date.now() }
           : h
       ));
     }
@@ -1216,7 +1310,6 @@ export default function ChatPage() {
         return updated;
       });
     } catch (error) {
-      console.error("Error:", error);
       const errorMsg: Message = {
         id: (Date.now() + 1).toString(),
         role: "assistant",
@@ -1351,9 +1444,16 @@ export default function ChatPage() {
                           onClick={(e) => e.stopPropagation()}
                         />
                       ) : (
-                        <span className="block truncate text-sm">
-                          {chat.title}
-                        </span>
+                        <div className="flex flex-col">
+                          <span className="block truncate text-sm">
+                            {chat.title}
+                          </span>
+                          {chat.updatedAt && (
+                            <span className="block text-[10px] text-slate-500 mt-0.5 font-medium">
+                              {new Date(chat.updatedAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
+                            </span>
+                          )}
+                        </div>
                       )}
                     </button>
 
@@ -1934,31 +2034,92 @@ export default function ChatPage() {
           <div className="max-w-3xl mx-auto space-y-6">
             <div className="relative group">
               <div className="absolute -inset-0.5 bg-gradient-to-r from-indigo-500 to-purple-600 rounded-[28px] opacity-10 group-focus-within:opacity-30 blur-sm transition-opacity duration-500" />
-              <div className="relative flex items-end bg-[var(--surface-1)] border border-slate-800 rounded-[24px] shadow-2xl transition-all duration-300 group-focus-within:border-indigo-500/50">
-                <Button variant="ghost" size="icon" className="h-10 w-10 text-slate-500 hover:text-indigo-500 m-2">
-                  <Sparkles className="h-5 w-5" />
-                </Button>
-                <Textarea
-                  ref={textareaRef}
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  placeholder="Ask a question about your data..."
-                  className="flex-1 min-h-[56px] max-h-48 resize-none border-0 bg-transparent focus-visible:ring-0 shadow-none py-4 px-0 text-sm text-white placeholder:text-slate-600 font-medium"
-                  rows={1}
-                />
-                <div className="flex items-center gap-2 p-2">
-                  <Button variant="ghost" size="icon" className="h-10 w-10 text-slate-500 hover:text-white rounded-xl">
-                    <Paperclip className="h-5 w-5" />
-                  </Button>
-                  <Button
-                    onClick={handleSend}
-                    disabled={!input.trim() || isTyping}
-                    size="icon"
-                    className="h-10 w-10 rounded-2xl bg-gradient-to-br from-indigo-600 to-purple-700 hover:from-indigo-700 hover:to-purple-800 text-white shadow-xl shadow-indigo-600/20 transition-all active:scale-95"
+              <div className="relative flex flex-col bg-[var(--surface-1)] border border-slate-800 rounded-[24px] shadow-2xl transition-all duration-300 group-focus-within:border-indigo-500/50 p-2">
+                {attachedFile && (
+                  <div className="flex items-center gap-2 bg-indigo-950/40 border border-indigo-500/30 text-indigo-200 text-xs px-3 py-1.5 rounded-full w-fit m-2 animate-in fade-in slide-in-from-bottom-1 duration-300">
+                    {filePreviewUrl ? (
+                      <img src={filePreviewUrl} alt="Preview" className="h-6 w-6 rounded-md object-cover border border-indigo-500/20" />
+                    ) : (
+                      <FileText className="h-3.5 w-3.5 text-indigo-400" />
+                    )}
+                    <span className="font-semibold truncate max-w-[200px]">{attachedFile.name}</span>
+                    <span className="text-[10px] text-indigo-300">({(attachedFile.size / 1024).toFixed(1)} KB)</span>
+                    <button 
+                      onClick={() => setAttachedFile(null)} 
+                      className="hover:text-white hover:bg-indigo-900/50 rounded-full p-0.5 transition-colors ml-1"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                )}
+                <div className="flex items-end w-full">
+                  <Button 
+                    onClick={handleGenerate}
+                    variant="ghost" 
+                    size="icon" 
+                    className="h-10 w-10 text-slate-500 hover:text-indigo-500 m-2"
                   >
-                    <Send className="h-4 w-4" />
+                    <Sparkles className="h-5 w-5" />
                   </Button>
+                  <Textarea
+                    ref={textareaRef}
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                    placeholder="Ask a question about your data..."
+                    className="flex-1 min-h-[56px] max-h-48 resize-none border-0 bg-transparent focus-visible:ring-0 shadow-none py-4 px-0 text-sm text-white placeholder:text-slate-600 font-medium"
+                    rows={1}
+                  />
+                  <div className="flex items-center gap-2 p-2">
+                    <input
+                      type="file"
+                      ref={fileInputRef}
+                      onChange={onFileChange}
+                      className="hidden"
+                      accept=".txt,.csv,.json,.sql,.md"
+                    />
+                    <Button 
+                      onClick={toggleListening}
+                      variant="ghost" 
+                      size="icon" 
+                      className={`h-10 w-10 rounded-xl transition-all ${
+                        isListening 
+                          ? "text-red-500 bg-red-500/10 hover:bg-red-500/20 hover:text-red-600 animate-pulse border border-red-500/30" 
+                          : "text-slate-500 hover:text-white"
+                      }`}
+                    >
+                      {isListening ? <MicOff className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
+                    </Button>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger render={
+                        <Button 
+                          variant="ghost" 
+                          size="icon" 
+                          className="h-10 w-10 text-slate-500 hover:text-white rounded-xl"
+                        >
+                          <Plus className="h-5 w-5" />
+                        </Button>
+                      } />
+                      <DropdownMenuContent align="end" className="bg-slate-900 border-slate-800 text-white w-48 mb-2 p-1.5 rounded-xl shadow-2xl z-[100]">
+                        <DropdownMenuItem onClick={handleAttachFile} className="cursor-pointer hover:bg-slate-800 focus:bg-slate-800 text-xs flex items-center gap-2.5 py-2 px-3 rounded-lg text-slate-300">
+                          <Plus className="h-4 w-4 text-emerald-400" />
+                          <span>Upload files</span>
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={startCamera} className="cursor-pointer hover:bg-slate-800 focus:bg-slate-800 text-xs flex items-center gap-2.5 py-2 px-3 rounded-lg text-slate-300">
+                          <Camera className="h-4 w-4 text-amber-400" />
+                          <span>Camera</span>
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                    <Button
+                      onClick={handleSend}
+                      disabled={(!input.trim() && !attachedFile) || isTyping}
+                      size="icon"
+                      className="h-10 w-10 rounded-2xl bg-gradient-to-br from-indigo-600 to-purple-700 hover:from-indigo-700 hover:to-purple-800 text-white shadow-xl shadow-indigo-600/20 transition-all active:scale-95"
+                    >
+                      <Send className="h-4 w-4" />
+                    </Button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -2454,6 +2615,64 @@ export default function ChatPage() {
                   </div>
                 </>
               )}
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {isCameraOpen && (
+          <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[999] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-slate-900 border border-slate-800 rounded-3xl overflow-hidden max-w-md w-full shadow-2xl p-6 space-y-4"
+            >
+              <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                  <Camera className="h-5 w-5 text-indigo-400" />
+                  Capture Photo
+                </h3>
+                <button 
+                  onClick={stopCamera}
+                  className="text-slate-400 hover:text-white rounded-full p-1 transition-colors"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+
+              <div className="relative rounded-2xl overflow-hidden bg-slate-950 aspect-video flex items-center justify-center border border-slate-800">
+                <video 
+                  ref={videoRef} 
+                  autoPlay 
+                  playsInline 
+                  className="w-full h-full object-cover scale-x-[-1]"
+                />
+                {!cameraStream && (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-500 gap-2">
+                    <Loader2 className="h-8 w-8 animate-spin text-indigo-500" />
+                    <span className="text-xs">Initializing camera stream...</span>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex items-center justify-end gap-3 pt-2">
+                <Button 
+                  onClick={stopCamera}
+                  variant="ghost"
+                  className="text-slate-400 hover:text-white cursor-pointer"
+                >
+                  Cancel
+                </Button> 
+                <Button 
+                  onClick={captureSnapshot}
+                  disabled={!cameraStream}
+                  className="bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white rounded-xl shadow-lg shadow-indigo-600/20 cursor-pointer"
+                >
+                  Take Photo
+                </Button>
+              </div>
             </motion.div>
           </div>
         )}
