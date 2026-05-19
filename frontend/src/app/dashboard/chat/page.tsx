@@ -38,7 +38,13 @@ import {
   Download,
   Search,
   Bookmark,
+  X,
+  Loader2,
+  CheckCircle2,
+  AlertCircle,
+  ArrowLeft,
 } from "lucide-react";
+import { Input } from "@/components/ui/input";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -135,6 +141,7 @@ export default function ChatPage() {
   const [model, setModel] = useState<string>("gemini-2.0-flash");
   const [databases, setDatabases] = useState<any[]>([]);
   const [selectedDb, setSelectedDb] = useState<string>("");
+  const [selectedDbs, setSelectedDbs] = useState<string[]>([]);
   const [projects, setProjects] = useState<any[]>([]);
   const [selectedProject, setSelectedProject] = useState<string>("");
   const [history, setHistory] = useState<{ id: string; title: string; active: boolean; messages: Message[]; isFavorite?: boolean }[]>([]);
@@ -146,6 +153,241 @@ export default function ChatPage() {
   const [isResultsOpen, setIsResultsOpen] = useState(false);
   const [activeResult, setActiveResult] = useState<any>(null);
   const [resultsTab, setResultsTab] = useState("results");
+
+  const [showWarningModal, setShowWarningModal] = useState(false);
+
+  // Database configuration states inside warning modal
+  const [activeConfigDb, setActiveConfigDb] = useState<any | null>(null);
+  const [dbType, setDbType] = useState("postgresql");
+  const [connectionString, setConnectionString] = useState("");
+  const [displayName, setDisplayName] = useState("");
+  const [connectionMethod, setConnectionMethod] = useState<'string' | 'params'>('string');
+  const [host, setHost] = useState("");
+  const [port, setPort] = useState("");
+  const [databaseName, setDatabaseName] = useState("");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [isTesting, setIsTesting] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [testResult, setTestResult] = useState<{status: 'success' | 'error', message: string} | null>(null);
+
+  const DB_TYPES = [
+    { id: "postgresql", name: "PostgreSQL" },
+    { id: "mysql", name: "MySQL" },
+    { id: "mongodb", name: "MongoDB" },
+  ];
+
+  const getDefaultPort = (type: string) => {
+    switch (type) {
+      case 'postgresql': return 5432;
+      case 'mysql': return 3306;
+      case 'mongodb': return 27017;
+      default: return 5432;
+    }
+  };
+
+  const parseConnectionString = (urlStr: string) => {
+    try {
+      const protocolMatch = urlStr.match(/^([^:]+):\/\/(.*)$/);
+      if (!protocolMatch) return null;
+      let type = protocolMatch[1].toLowerCase();
+      if (type === 'postgres') type = 'postgresql';
+      const rest = protocolMatch[2];
+      let username = "";
+      let password = "";
+      let hostPortDb = rest;
+      const lastAtIndex = rest.lastIndexOf('@');
+      if (lastAtIndex !== -1) {
+        const credentialsPart = rest.substring(0, lastAtIndex);
+        hostPortDb = rest.substring(lastAtIndex + 1);
+        const firstColonIndex = credentialsPart.indexOf(':');
+        if (firstColonIndex !== -1) {
+          username = decodeURIComponent(credentialsPart.substring(0, firstColonIndex));
+          password = decodeURIComponent(credentialsPart.substring(firstColonIndex + 1));
+        } else {
+          username = decodeURIComponent(credentialsPart);
+        }
+      }
+      let hostPort = hostPortDb;
+      let database = "";
+      const firstSlashIndex = hostPortDb.indexOf('/');
+      if (firstSlashIndex !== -1) {
+        hostPort = hostPortDb.substring(0, firstSlashIndex);
+        database = hostPortDb.substring(firstSlashIndex + 1);
+      }
+      let host = hostPort;
+      let port = type === 'postgresql' ? 5432 : (type === 'mongodb' ? 27017 : 3306);
+      const lastColonIndex = hostPort.lastIndexOf(':');
+      if (lastColonIndex !== -1) {
+        const portStr = hostPort.substring(lastColonIndex + 1);
+        if (/^\d+$/.test(portStr)) {
+          host = hostPort.substring(0, lastColonIndex);
+          port = parseInt(portStr);
+        }
+      }
+      return { type, host, port, database, username, password };
+    } catch (e) {
+      return null;
+    }
+  };
+
+  const getConnectionPayload = () => {
+    let payload: any = {};
+    if (connectionMethod === 'string') {
+      if (!connectionString) return null;
+      const parsed = parseConnectionString(connectionString);
+      if (!parsed) return null;
+      payload = {
+        name: displayName || `${parsed.type}_${parsed.database}`,
+        type: parsed.type,
+        host: parsed.host,
+        port: parsed.port,
+        database: parsed.database,
+        username: parsed.username,
+        password: parsed.password
+      };
+    } else {
+      if (!databaseName) return null;
+      payload = {
+        name: displayName || `${dbType}_${databaseName}`,
+        type: dbType,
+        host: host || "localhost",
+        port: port ? parseInt(port) : getDefaultPort(dbType),
+        database: databaseName,
+        username: username,
+        password: password
+      };
+    }
+    return payload;
+  };
+
+  const handleTestConnection = async () => {
+    const payload = getConnectionPayload();
+    if (!payload) {
+      setTestResult({ status: 'error', message: "Please fill in all required fields first" });
+      return;
+    }
+    setIsTesting(true);
+    setTestResult(null);
+    try {
+      const res = await fetch("http://localhost:8000/databases/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if (data.status === 'success') {
+        setTestResult({ status: 'success', message: data.message || "Connection successful!" });
+      } else {
+        setTestResult({ status: 'error', message: data.message || "Connection failed." });
+      }
+    } catch (e) {
+      setTestResult({ status: 'error', message: "Failed to connect to backend server." });
+    } finally {
+      setIsTesting(false);
+    }
+  };
+
+  const handleSaveConnection = async () => {
+    const payload = getConnectionPayload();
+    if (!payload) return;
+    setIsSaving(true);
+    try {
+      const existing = databases.find(db => db.id === activeConfigDb?.id);
+      const url = existing 
+        ? `http://localhost:8000/databases/${existing.id}`
+        : "http://localhost:8000/databases";
+      const method = existing ? "PUT" : "POST";
+      
+      const res = await fetch(url, {
+        method: method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      
+      if (res.ok) {
+        const savedConn = await res.json();
+        
+        // If not default/connected, set it to default/connected
+        if (!savedConn.is_default) {
+          await fetch(`http://localhost:8000/databases/${savedConn.id}/default`, {
+            method: "PUT",
+          });
+        }
+
+        setTestResult({ 
+          status: 'success', 
+          message: "Successfully connected and saved!" 
+        });
+        
+        await fetchDatabases();
+        
+        setTimeout(() => {
+          setActiveConfigDb(null);
+          setTestResult(null);
+        }, 1500);
+      } else {
+        setTestResult({ 
+          status: 'error', 
+          message: "Failed to save connection details." 
+        });
+      }
+    } catch (e) {
+      setTestResult({ status: 'error', message: "Failed to connect to backend server." });
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const startConfigDb = (dbInfo: any) => {
+    const existing = databases.find(db => db.id === dbInfo.id);
+    setActiveConfigDb(dbInfo);
+    setDbType(dbInfo.type?.toLowerCase().includes("mongo") ? "mongodb" : (dbInfo.type?.toLowerCase().includes("mysql") ? "mysql" : "postgresql"));
+    setDisplayName(dbInfo.name || "");
+    setTestResult(null);
+
+    if (existing) {
+      setHost(existing.host || "");
+      setPort(existing.port ? String(existing.port) : "");
+      setDatabaseName(existing.database || "");
+      setUsername(existing.username || "");
+      setPassword(existing.password || "");
+      
+      let connStr = "";
+      if (existing.type === "sqlite") {
+        connStr = `sqlite:///${existing.database}`;
+      } else {
+        const user = existing.username ? decodeURIComponent(existing.username) : "";
+        const pass = existing.password ? decodeURIComponent(existing.password) : "";
+        const auth = (user || pass) ? `${user}:${pass}@` : "";
+        const portStr = existing.port ? `:${existing.port}` : "";
+        connStr = `${existing.type}://${auth}${existing.host || ""}${portStr}/${existing.database || ""}`;
+      }
+      setConnectionString(connStr);
+      setConnectionMethod(existing.host || existing.username ? "params" : "string");
+    } else {
+      setHost("localhost");
+      setPort("");
+      setDatabaseName("");
+      setUsername("");
+      setPassword("");
+      setConnectionString("");
+      setConnectionMethod("string");
+    }
+  };
+
+  const handleConnectDbInModal = async (dbId: string) => {
+    try {
+      const res = await fetch(`http://localhost:8000/databases/${dbId}/default`, {
+        method: "PUT",
+      });
+      if (res.ok) {
+        await fetchDatabases();
+      }
+    } catch (e) {
+      console.error("Failed to connect database in modal", e);
+    }
+  };
 
   const currentProject = projects.find(p => p.id === selectedProject);
 
@@ -453,7 +695,8 @@ export default function ChatPage() {
           question: finalValue,
           provider: provider,
           model: model,
-          connection_id: effectiveDb
+          connection_id: effectiveDb,
+          connection_ids: selectedDbs.length > 0 ? selectedDbs : [effectiveDb]
         }),
       });
 
@@ -698,19 +941,62 @@ export default function ChatPage() {
     if (selectedProject) {
       const proj = projects.find(p => p.id === selectedProject);
       if (proj && proj.databases && proj.databases.length > 0) {
-        const firstDb = databases.find(db => proj.databases.includes(db.id));
+        // Find the first connected database of the project
+        const firstDb = databases.find(db => db.is_default && proj.databases.some((pdb: any) => pdb.id === db.id));
         if (firstDb) {
           setSelectedDb(firstDb.id);
+          setSelectedDbs([firstDb.id]);
         } else {
-          setSelectedDb("");
+          // If no database is default/connected, fall back to the first available database of the project
+          const anyProjDb = databases.find(db => proj.databases.some((pdb: any) => pdb.id === db.id));
+          if (anyProjDb) {
+            setSelectedDb(anyProjDb.id);
+            setSelectedDbs([anyProjDb.id]);
+          } else {
+            setSelectedDb("");
+            setSelectedDbs([]);
+          }
         }
       } else {
         setSelectedDb("");
+        setSelectedDbs([]);
       }
     } else {
       setSelectedDb("");
+      setSelectedDbs([]);
     }
   }, [selectedProject, databases, projects]);
+
+  // Hook to show connection warning modal if databases of selected project are not connected
+  useEffect(() => {
+    if (selectedProject) {
+      const proj = projects.find(p => p.id === selectedProject);
+      if (proj && proj.databases && proj.databases.length > 0) {
+        const hasDisconnected = proj.databases.some((pdb: any) => {
+          const dbInList = databases.find(db => db.id === pdb.id);
+          return !dbInList || !dbInList.is_default;
+        });
+        if (hasDisconnected) {
+          setShowWarningModal(true);
+          setActiveConfigDb(null);
+        }
+      }
+    } else {
+      setShowWarningModal(false);
+      setActiveConfigDb(null);
+    }
+  }, [selectedProject]);
+
+  // Derive connected/disconnected databases of the selected project
+  const projectDbsInfo = currentProject?.databases || [];
+  const disconnectedProjectDbs = projectDbsInfo.filter((pdb: any) => {
+    const dbInList = databases.find(db => db.id === pdb.id);
+    return !dbInList || !dbInList.is_default;
+  });
+  const connectedProjectDbs = projectDbsInfo.filter((pdb: any) => {
+    const dbInList = databases.find(db => db.id === pdb.id);
+    return dbInList && dbInList.is_default;
+  });
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -886,7 +1172,8 @@ export default function ChatPage() {
           question: input,
           provider: provider,
           model: model,
-          connection_id: effectiveDb
+          connection_id: effectiveDb,
+          connection_ids: selectedDbs.length > 0 ? selectedDbs : [effectiveDb]
         }),
       });
 
@@ -1239,36 +1526,86 @@ export default function ChatPage() {
               <Label htmlFor="db-select" className="text-xs text-muted-foreground hidden lg:inline">
                 Database:
               </Label>
-              <Select value={selectedDb} onValueChange={setSelectedDb}>
-                <SelectTrigger className="h-8 w-44 text-xs">
-                  <SelectValue placeholder="Select Database">
-                    {selectedDb ? (
-                      <span className="flex items-center gap-1.5">
-                        <span className="text-emerald-500 font-black">✓</span>
-                        <span>{databases.find(db => db.id === selectedDb)?.name || "Select Database"}</span>
-                      </span>
-                    ) : (
-                      "Select Database"
-                    )}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  {filteredDatabases.map((db) => (
-                    <SelectItem key={db.id} value={db.id}>
-                      <span className="flex items-center justify-between w-full gap-4">
+              <DropdownMenu>
+                <DropdownMenuTrigger render={
+                  <Button variant="outline" className="h-8 w-44 text-xs flex justify-between items-center px-3 border-slate-800 bg-slate-900 text-white hover:bg-slate-850 hover:text-white rounded-xl">
+                    <span className="truncate max-w-[120px]">
+                      {selectedDbs.length > 0 ? (
+                        selectedDbs.map(id => databases.find(db => db.id === id)?.name).filter(Boolean).join(", ")
+                      ) : selectedDb ? (
+                        databases.find(db => db.id === selectedDb)?.name || "Select Database"
+                      ) : (
+                        "Select Database"
+                      )}
+                    </span>
+                    <ChevronDown className="h-3 w-3 opacity-60 ml-1.5 flex-shrink-0" />
+                  </Button>
+                } />
+                <DropdownMenuContent className="bg-slate-900 border-slate-800 text-white w-48">
+                  {filteredDatabases.length > 0 && (
+                    <div 
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (selectedDbs.length === filteredDatabases.length) {
+                          setSelectedDbs([]);
+                          setSelectedDb("");
+                        } else {
+                          const allIds = filteredDatabases.map(db => db.id);
+                          setSelectedDbs(allIds);
+                          if (allIds.length > 0) setSelectedDb(allIds[0]);
+                        }
+                      }}
+                      className="cursor-pointer hover:bg-slate-800 text-xs flex items-center justify-between py-2 px-3 rounded-lg transition-colors select-none text-white w-full"
+                    >
+                      <span className="font-semibold text-indigo-400">🌐 Select All</span>
+                      <Switch 
+                        checked={selectedDbs.length === filteredDatabases.length && filteredDatabases.length > 0}
+                        className="pointer-events-none data-[state=checked]:bg-indigo-600 scale-75"
+                      />
+                    </div>
+                  )}
+                  {filteredDatabases.length > 0 && <DropdownMenuSeparator className="bg-slate-800" />}
+                  {filteredDatabases.map((db) => {
+                    const isChecked = selectedDbs.includes(db.id) || (selectedDbs.length === 0 && selectedDb === db.id);
+                    return (
+                      <div
+                        key={db.id}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          let updated;
+                          if (selectedDbs.includes(db.id)) {
+                            updated = selectedDbs.filter(id => id !== db.id);
+                          } else {
+                            updated = [...selectedDbs, db.id];
+                          }
+                          setSelectedDbs(updated);
+                          // Keep single selectedDb in sync for backward compatibility / fallback
+                          if (updated.length > 0) {
+                            setSelectedDb(updated[0]);
+                          } else {
+                            setSelectedDb("");
+                          }
+                        }}
+                        className="cursor-pointer hover:bg-slate-800 text-xs flex items-center justify-between py-2 px-3 rounded-lg transition-colors select-none text-white w-full"
+                      >
                         <span className="flex items-center gap-1.5">
                           <span>{db.type === 'postgresql' ? '🐘' : db.type === 'mysql' ? '🐬' : db.type === 'mongodb' ? '🍃' : '🪶'}</span>
                           <span>{db.name}</span>
                         </span>
-                        <span className="text-emerald-500 font-black text-xs ml-auto">✓</span>
-                      </span>
-                    </SelectItem>
-                  ))}
+                        <Switch 
+                          checked={isChecked}
+                          className="pointer-events-none data-[state=checked]:bg-indigo-600 scale-75"
+                        />
+                      </div>
+                    );
+                  })}
                   {filteredDatabases.length === 0 && (
-                    <SelectItem value="none" disabled>No connected databases</SelectItem>
+                    <div className="p-3 text-center text-xs text-slate-500">
+                      No connected databases
+                    </div>
                   )}
-                </SelectContent>
-              </Select>
+                </DropdownMenuContent>
+              </DropdownMenu>
             </div>
             <div className="flex items-center gap-2">
               <Label htmlFor="show-sql" className="text-xs text-muted-foreground hidden sm:inline">
@@ -1774,6 +2111,351 @@ export default function ChatPage() {
               )}
             </div>
           </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Database Connection Warning Popup Modal */}
+      <AnimatePresence>
+        {showWarningModal && currentProject && disconnectedProjectDbs.length > 0 && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            {/* Blurry Backdrop Filter */}
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => {
+                setShowWarningModal(false);
+                setActiveConfigDb(null);
+              }}
+              className="absolute inset-0 bg-black/60 backdrop-blur-md"
+            />
+
+            {/* Modal Dialog Box */}
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 15 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 15 }}
+              transition={{ type: "spring", duration: 0.4 }}
+              className="relative bg-[var(--surface-1)] border border-slate-800 rounded-3xl w-full max-w-md shadow-2xl p-8 z-55 flex flex-col max-h-[85vh] text-white"
+            >
+              {/* Close Button */}
+              <button 
+                onClick={() => {
+                  setShowWarningModal(false);
+                  setActiveConfigDb(null);
+                }}
+                className="absolute top-6 right-6 text-slate-500 hover:text-white bg-slate-900/30 hover:bg-slate-800/80 p-1.5 rounded-lg transition-colors cursor-pointer"
+              >
+                <X className="h-4.5 w-4.5" />
+              </button>
+
+              {activeConfigDb ? (
+                // Database Configuration View
+                <>
+                  {/* Back button and title */}
+                  <div className="mb-6 flex items-center gap-3">
+                    <button 
+                      onClick={() => setActiveConfigDb(null)}
+                      className="text-slate-400 hover:text-white p-1 hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
+                    >
+                      <ArrowLeft className="h-5 w-5" />
+                    </button>
+                    <div>
+                      <h3 className="text-xl font-bold text-white leading-tight">
+                        Configure Database
+                      </h3>
+                      <p className="text-xs text-slate-400 mt-1 font-medium">
+                        Configure connection details for <span className="text-indigo-400 font-semibold">{displayName}</span>
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Form fields */}
+                  <div className="flex-1 overflow-y-auto pr-1 space-y-4 py-1 text-slate-350">
+                    {/* Database Type Select */}
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold text-slate-450 uppercase tracking-wider">Select Database Type</label>
+                      <Select value={dbType} onValueChange={(val) => setDbType(val || "postgresql")}>
+                        <SelectTrigger className="w-full bg-slate-900 border-slate-800 h-11 rounded-xl px-4 text-white hover:border-slate-700">
+                          <SelectValue placeholder="Select type" />
+                        </SelectTrigger>
+                        <SelectContent className="bg-slate-900 border-slate-800 text-white">
+                          {DB_TYPES.map(db => (
+                            <SelectItem key={db.id} value={db.id} className="cursor-pointer hover:bg-slate-800">
+                              {db.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    {/* Connection Method Toggle Tab */}
+                    <div className="flex items-center justify-between pt-2">
+                      <span className="text-xs font-bold text-slate-455 uppercase tracking-wider">Connection Method</span>
+                      <div className="flex gap-1 p-0.5 bg-slate-900 border border-slate-800 rounded-lg">
+                        <button
+                          type="button"
+                          onClick={() => setConnectionMethod('string')}
+                          className={`px-3 py-1.5 text-[10px] font-bold rounded-md transition-all cursor-pointer ${
+                            connectionMethod === 'string' 
+                              ? 'bg-indigo-600 text-white' 
+                              : 'text-slate-400 hover:text-white'
+                          }`}
+                        >
+                          URI String
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setConnectionMethod('params')}
+                          className={`px-3 py-1.5 text-[10px] font-bold rounded-md transition-all cursor-pointer ${
+                            connectionMethod === 'params' 
+                              ? 'bg-indigo-600 text-white' 
+                              : 'text-slate-400 hover:text-white'
+                          }`}
+                        >
+                          Form Parameters
+                        </button>
+                      </div>
+                    </div>
+
+                    {connectionMethod === 'params' ? (
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2">
+                        {/* Host */}
+                        <div className="col-span-2 space-y-1.5">
+                          <label className="text-[10px] font-bold text-slate-450 uppercase tracking-wider">Host</label>
+                          <Input 
+                            value={host}
+                            onChange={(e) => setHost(e.target.value)}
+                            placeholder="localhost"
+                            className="bg-slate-900 border-slate-800 focus:border-indigo-500 h-10 rounded-xl text-xs text-white"
+                          />
+                        </div>
+                        {/* Port */}
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] font-bold text-slate-450 uppercase tracking-wider">Port</label>
+                          <Input 
+                            value={port}
+                            onChange={(e) => setPort(e.target.value)}
+                            placeholder={String(getDefaultPort(dbType))}
+                            className="bg-slate-900 border-slate-800 focus:border-indigo-500 h-10 rounded-xl text-xs text-white"
+                          />
+                        </div>
+
+                        {/* Database Name */}
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] font-bold text-slate-450 uppercase tracking-wider">Database Name</label>
+                          <Input 
+                            value={databaseName}
+                            onChange={(e) => setDatabaseName(e.target.value)}
+                            placeholder="e.g., main_db"
+                            className="bg-slate-900 border-slate-800 focus:border-indigo-500 h-10 rounded-xl text-xs text-white"
+                          />
+                        </div>
+                        {/* Username */}
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] font-bold text-slate-455 uppercase tracking-wider">Username</label>
+                          <Input 
+                            value={username}
+                            onChange={(e) => setUsername(e.target.value)}
+                            placeholder="postgres"
+                            className="bg-slate-900 border-slate-800 focus:border-indigo-500 h-10 rounded-xl text-xs text-white"
+                          />
+                        </div>
+                        {/* Password */}
+                        <div className="space-y-1.5">
+                          <label className="text-[10px] font-bold text-slate-455 uppercase tracking-wider">Password</label>
+                          <Input 
+                            type="password"
+                            value={password}
+                            onChange={(e) => setPassword(e.target.value)}
+                            placeholder="••••••••"
+                            className="bg-slate-900 border-slate-800 focus:border-indigo-500 h-10 rounded-xl text-xs text-white"
+                          />
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="space-y-2 pt-2">
+                        <label className="text-[10px] font-bold text-slate-455 uppercase tracking-wider">Connection String (URI)</label>
+                        <Input 
+                          value={connectionString}
+                          onChange={(e) => setConnectionString(e.target.value)}
+                          placeholder={`${dbType}://username:password@host:port/database`}
+                          className="bg-slate-900 border-slate-800 focus:border-indigo-500 h-11 rounded-xl text-xs font-mono text-white"
+                        />
+                      </div>
+                    )}
+
+                    {testResult && (
+                      <div className={`p-4 rounded-xl flex items-start gap-3 border ${
+                        testResult.status === 'success' 
+                          ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
+                          : 'bg-rose-500/10 border-rose-500/20 text-rose-400'
+                      }`}>
+                        {testResult.status === 'success' ? <CheckCircle2 className="h-5 w-5 mt-0.5 shrink-0" /> : <AlertCircle className="h-5 w-5 mt-0.5 shrink-0" />}
+                        <p className="text-xs font-medium leading-relaxed">{testResult.message}</p>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Actions Footer */}
+                  <div className="flex items-center gap-3 pt-6 mt-4 border-t border-slate-800/50">
+                    <Button 
+                      variant="ghost" 
+                      onClick={() => setActiveConfigDb(null)}
+                      className="w-1/3 text-slate-400 hover:text-white hover:bg-slate-805 h-11 rounded-xl font-bold cursor-pointer"
+                    >
+                      Back
+                    </Button>
+                    <Button 
+                      onClick={handleTestConnection}
+                      disabled={isTesting || isSaving || (connectionMethod === 'string' ? !connectionString : !databaseName)}
+                      className="w-1/3 bg-slate-900 border border-slate-800 hover:bg-slate-800 text-white font-bold h-11 rounded-xl cursor-pointer disabled:opacity-50"
+                    >
+                      {isTesting ? (
+                        <>
+                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                          Testing...
+                        </>
+                      ) : (
+                        "Test"
+                      )}
+                    </Button>
+                    <Button 
+                      onClick={handleSaveConnection}
+                      disabled={isSaving || isTesting || !testResult || testResult.status !== 'success'}
+                      className="w-1/3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold h-11 rounded-xl shadow-lg shadow-indigo-600/20 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer transition-all duration-200"
+                    >
+                      {isSaving ? (
+                        <>
+                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                          Saving...
+                        </>
+                      ) : (
+                        "Save & Connect"
+                      )}
+                    </Button>
+                  </div>
+                </>
+              ) : (
+                // Warning List View
+                <>
+                  {/* Title Header */}
+                  <div className="mb-6 flex items-start gap-4">
+                    <div className="h-12 w-12 rounded-xl bg-amber-500/10 flex items-center justify-center text-amber-500 shrink-0 border border-amber-500/20">
+                      <Database className="h-6 w-6" />
+                    </div>
+                    <div>
+                      <h3 className="text-xl font-bold text-white leading-tight">
+                        Database Connection Warning
+                      </h3>
+                      <p className="text-xs text-slate-400 mt-1 font-medium leading-relaxed">
+                        Some databases in the project <span className="text-indigo-400 font-semibold">{currentProject.title}</span> are not connected.
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* List of Databases */}
+                  <div className="flex-1 overflow-y-auto pr-1 space-y-4 py-1">
+                    {/* Disconnected Databases */}
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">Disconnected Databases</label>
+                      {disconnectedProjectDbs.map((db: any) => (
+                        <div 
+                          key={db.id}
+                          className="flex items-center justify-between p-3.5 rounded-xl border border-rose-500/20 bg-rose-500/5 text-slate-350"
+                        >
+                          <div className="flex items-center gap-3">
+                            <Database className="h-4.5 w-4.5 text-rose-500 shrink-0" />
+                            <div className="flex flex-col">
+                              <span className="text-xs font-bold text-white">{db.name}</span>
+                              <span className="text-[10px] text-slate-500 font-bold mt-0.5">{db.type}</span>
+                            </div>
+                          </div>
+                          
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => startConfigDb(db)}
+                              className="p-1.5 hover:bg-slate-800 text-slate-400 hover:text-white rounded-lg transition-colors cursor-pointer"
+                              title="Configure Connection Details"
+                            >
+                              <Pencil className="h-4 w-4" />
+                            </button>
+                            <Button
+                              size="sm"
+                              onClick={() => handleConnectDbInModal(db.id)}
+                              className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold h-8 px-3 rounded-lg text-xs cursor-pointer transition-all duration-200"
+                            >
+                              Connect
+                            </Button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Connected Databases */}
+                    {connectedProjectDbs.length > 0 && (
+                      <div className="space-y-2 pt-2">
+                        <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">Connected Databases</label>
+                        {connectedProjectDbs.map((db: any) => (
+                          <div 
+                            key={db.id}
+                            className="flex items-center justify-between p-3.5 rounded-xl border border-emerald-500/20 bg-emerald-500/5 text-slate-350"
+                          >
+                            <div className="flex items-center gap-3">
+                              <Database className="h-4.5 w-4.5 text-emerald-500 shrink-0" />
+                              <div className="flex flex-col">
+                                <span className="text-xs font-bold text-white">{db.name}</span>
+                                <span className="text-[10px] text-slate-500 font-bold mt-0.5">{db.type}</span>
+                              </div>
+                            </div>
+                            
+                            <div className="flex items-center gap-2">
+                              <button
+                                onClick={() => startConfigDb(db)}
+                                className="p-1.5 hover:bg-slate-800 text-slate-400 hover:text-white rounded-lg transition-colors cursor-pointer"
+                                title="Configure Connection Details"
+                              >
+                                <Pencil className="h-4 w-4" />
+                              </button>
+                              <span className="text-xs text-emerald-400 font-bold flex items-center gap-1.5">
+                                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                                Connected
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Actions Footer */}
+                  <div className="flex flex-col gap-3 pt-6 mt-4 border-t border-slate-800/50">
+                    <Button 
+                      onClick={() => setShowWarningModal(false)}
+                      className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold h-11 rounded-xl shadow-lg shadow-indigo-600/20 cursor-pointer"
+                    >
+                      {connectedProjectDbs.length > 0 
+                        ? "Proceed with Connected Databases" 
+                        : "Proceed Anyway"}
+                    </Button>
+                    <Button 
+                      variant="ghost" 
+                      onClick={() => {
+                        if (disconnectedProjectDbs.length > 0) {
+                          startConfigDb(disconnectedProjectDbs[0]);
+                        } else if (projectDbsInfo.length > 0) {
+                          startConfigDb(projectDbsInfo[0]);
+                        }
+                      }}
+                      className="w-full text-slate-400 hover:text-white hover:bg-slate-800 h-11 rounded-xl font-bold cursor-pointer"
+                    >
+                      Manage Databases
+                    </Button>
+                  </div>
+                </>
+              )}
+            </motion.div>
+          </div>
         )}
       </AnimatePresence>
     </div>

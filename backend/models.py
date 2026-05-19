@@ -27,4 +27,5 @@ class QueryRequest(BaseModel):
     provider: str = "gemini"
     model: Optional[str] = None
     connection_id: Optional[str] = None
+    connection_ids: Optional[List[str]] = None
     database: Optional[str] = None # New field for easy switching

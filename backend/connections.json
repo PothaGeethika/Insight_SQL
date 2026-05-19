@@ -8,7 +8,7 @@
         "username": "postgres",
         "password": "Geethuhyma@2902",
         "id": "d34d37a5-566a-4500-8fd9-8421ae31457a",
-        "is_default": false
+        "is_default": true
     },
     {
         "name": "project",
