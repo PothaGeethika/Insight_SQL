@@ -4,6 +4,7 @@ import * as React from "react";
 import { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useTheme } from "@/components/theme-provider";
 import { motion } from "framer-motion";
 import {
   Home,
@@ -50,9 +51,17 @@ export default function DashboardLayout({
 }) {
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
-  const [isDarkMode, setIsDarkMode] = useState(true);
   const [sidebarWidth, setSidebarWidth] = useState(280);
   const [isResizing, setIsResizing] = useState(false);
+  const { theme, setTheme } = useTheme();
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  // Compute actual dark mode state (resolving 'system' if needed)
+  const isDarkMode = mounted && (theme === "dark" || (theme === "system" && typeof window !== "undefined" && window.matchMedia("(prefers-color-scheme: dark)").matches));
 
   const startResizing = (mouseDownEvent: React.MouseEvent) => {
     mouseDownEvent.preventDefault();
@@ -88,18 +97,6 @@ export default function DashboardLayout({
     };
   }, [isResizing]);
 
-  // Apply dark class to <html> so Tailwind dark: variants work globally
-  useEffect(() => {
-    if (isDarkMode) {
-      document.documentElement.classList.add("dark");
-    } else {
-      document.documentElement.classList.remove("dark");
-    }
-  }, [isDarkMode]);
-
-  useEffect(() => {
-    document.documentElement.classList.add("dark");
-  }, []);
 
   return (
     <div className="flex h-screen w-full overflow-hidden font-sans bg-white dark:bg-[var(--surface-0)] text-slate-800 dark:text-slate-300 transition-colors duration-300">
@@ -227,25 +224,27 @@ export default function DashboardLayout({
 
           <div className="flex items-center gap-3">
             {/* Light / Dark Mode Toggle */}
-            <button
-              onClick={() => setIsDarkMode(!isDarkMode)}
-              className="relative flex items-center gap-2.5 px-4 py-2 rounded-xl border text-xs font-black uppercase tracking-widest transition-all duration-300 bg-slate-50 dark:bg-[var(--surface-1)] border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-300 hover:border-indigo-500/50 hover:text-indigo-600 dark:hover:text-white"
-            >
-              {/* Toggle Track */}
-              <div className={`relative h-5 w-9 rounded-full transition-colors duration-300 ${isDarkMode ? "bg-indigo-600" : "bg-slate-200"}`}>
-                <div
-                  className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow-md transition-all duration-300 flex items-center justify-center ${
-                    isDarkMode ? "left-[18px]" : "left-0.5"
-                  }`}
-                >
-                  {isDarkMode
-                    ? <Moon className="h-2.5 w-2.5 text-indigo-600" />
-                    : <Sun className="h-2.5 w-2.5 text-amber-500" />
-                  }
+            {mounted && (
+              <button
+                onClick={() => setTheme(isDarkMode ? "light" : "dark")}
+                className="relative flex items-center gap-2.5 px-4 py-2 rounded-xl border text-xs font-black uppercase tracking-widest transition-all duration-300 bg-slate-50 dark:bg-[var(--surface-1)] border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-300 hover:border-indigo-500/50 hover:text-indigo-600 dark:hover:text-white"
+              >
+                {/* Toggle Track */}
+                <div className={`relative h-5 w-9 rounded-full transition-colors duration-300 ${isDarkMode ? "bg-indigo-600" : "bg-slate-200"}`}>
+                  <div
+                    className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow-md transition-all duration-300 flex items-center justify-center ${
+                      isDarkMode ? "left-[18px]" : "left-0.5"
+                    }`}
+                  >
+                    {isDarkMode
+                      ? <Moon className="h-2.5 w-2.5 text-indigo-600" />
+                      : <Sun className="h-2.5 w-2.5 text-amber-500" />
+                    }
+                  </div>
                 </div>
-              </div>
-              <span>{isDarkMode ? "Dark" : "Light"}</span>
-            </button>
+                <span>{isDarkMode ? "Dark" : "Light"}</span>
+              </button>
+            )}
 
             {/* Notification Bell */}
             <Button

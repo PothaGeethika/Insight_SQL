@@ -188,7 +188,7 @@ export default function ChatPage() {
   const [password, setPassword] = useState("");
   const [isTesting, setIsTesting] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  const [testResult, setTestResult] = useState<{status: 'success' | 'error', message: string} | null>(null);
+  const [testResult, setTestResult] = useState<{ status: 'success' | 'error', message: string } | null>(null);
 
   const DB_TYPES = [
     { id: "postgresql", name: "PostgreSQL" },
@@ -313,20 +313,20 @@ export default function ChatPage() {
     setIsSaving(true);
     try {
       const existing = databases.find(db => db.id === activeConfigDb?.id);
-      const url = existing 
+      const url = existing
         ? `http://localhost:8000/databases/${existing.id}`
         : "http://localhost:8000/databases";
       const method = existing ? "PUT" : "POST";
-      
+
       const res = await fetch(url, {
         method: method,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
       });
-      
+
       if (res.ok) {
         const savedConn = await res.json();
-        
+
         // If not default/connected, set it to default/connected
         if (!savedConn.is_default) {
           await fetch(`http://localhost:8000/databases/${savedConn.id}/default`, {
@@ -334,21 +334,21 @@ export default function ChatPage() {
           });
         }
 
-        setTestResult({ 
-          status: 'success', 
-          message: "Successfully connected and saved!" 
+        setTestResult({
+          status: 'success',
+          message: "Successfully connected and saved!"
         });
-        
+
         await fetchDatabases();
-        
+
         setTimeout(() => {
           setActiveConfigDb(null);
           setTestResult(null);
         }, 1500);
       } else {
-        setTestResult({ 
-          status: 'error', 
-          message: "Failed to save connection details." 
+        setTestResult({
+          status: 'error',
+          message: "Failed to save connection details."
         });
       }
     } catch (e) {
@@ -371,7 +371,7 @@ export default function ChatPage() {
       setDatabaseName(existing.database || "");
       setUsername(existing.username || "");
       setPassword(existing.password || "");
-      
+
       let connStr = "";
       if (existing.type === "sqlite") {
         connStr = `sqlite:///${existing.database}`;
@@ -902,7 +902,7 @@ export default function ChatPage() {
       let userMsg = msg;
       let assistantMsg = msg;
       const idx = messages.findIndex(m => m.id === msg.id);
-      
+
       if (msg.role === "user") {
         userMsg = msg;
         if (idx >= 0 && idx + 1 < messages.length) {
@@ -1172,35 +1172,35 @@ export default function ChatPage() {
       setCurrentSessionId(updatedSessionId);
       const generateSummaryTitle = (text: string, file: File | null) => {
         if (!text.trim() && file) return `Attached: ${file.name}`;
-        
+
         const clean = text.trim();
         let titleStr = clean;
-        
+
         // Remove common conversational fillers at the very beginning of the prompt
         const fillerPrefixes = [
           "can you tell me ", "can you show me ", "please show me ", "could you show me ",
           "i want to see ", "show me ", "tell me ", "give me ", "could you tell me "
         ];
-        
+
         for (const prefix of fillerPrefixes) {
           if (titleStr.toLowerCase().startsWith(prefix)) {
             titleStr = titleStr.substring(prefix.length).trim();
             break;
           }
         }
-        
+
         const titleWords = titleStr.split(/\s+/);
-        
+
         // If the remaining prompt is short enough, use the whole thing
         if (titleWords.length <= 5 && titleStr.length < 40) {
           return titleStr.charAt(0).toUpperCase() + titleStr.slice(1);
         }
-        
+
         // Otherwise, take the first 5 words to form a natural, grammatically correct phrase
         const summary = titleWords.slice(0, 5).join(' ');
         return summary.charAt(0).toUpperCase() + summary.slice(1) + "...";
       };
-      
+
       const displayTitle = generateSummaryTitle(input, attachedFile);
       setHistory(prev => [
         {
@@ -1220,7 +1220,7 @@ export default function ChatPage() {
       ));
     }
     let effectiveDb = selectedDb;
-    
+
     // Auto-resolve database from selected project if one is not explicitly selected
     if (!effectiveDb && selectedProject) {
       if (filteredDatabases && filteredDatabases.length > 0) {
@@ -1233,7 +1233,7 @@ export default function ChatPage() {
       const warningMsg: Message = {
         id: (Date.now() + 1).toString(),
         role: "assistant",
-        content: selectedProject 
+        content: selectedProject
           ? "The selected project has no connected databases. Please add a database to the project or select one manually."
           : "Please select a database or project from the header before asking a question.",
         timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
@@ -1422,82 +1422,82 @@ export default function ChatPage() {
                     chat.title.toLowerCase().includes(historySearchQuery.toLowerCase())
                   )
                   .map((chat) => (
-                  <div
-                    key={chat.id}
-                    className={`group relative flex items-center rounded-lg transition-colors mb-0.5 ${chat.active ? "bg-accent" : "hover:bg-accent/50"}`}
-                  >
-                    <button
-                      onClick={() => loadSession(chat.id)}
-                      className={`flex-1 text-left px-3 py-2.5 min-w-0 ${chat.active ? "text-foreground font-medium" : "text-muted-foreground hover:text-foreground"}`}
+                    <div
+                      key={chat.id}
+                      className={`group relative flex items-center rounded-lg transition-colors mb-0.5 ${chat.active ? "bg-accent" : "hover:bg-accent/50"}`}
                     >
-                      {editingSessionId === chat.id ? (
-                        <input
-                          autoFocus
-                          className="w-full bg-background border rounded px-1.5 py-0.5 text-sm outline-none focus:ring-1 focus:ring-blue-500"
-                          value={editingSessionTitle}
-                          onChange={(e) => setEditingSessionTitle(e.target.value)}
-                          onBlur={() => handleRenameSession(chat.id, editingSessionTitle)}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') handleRenameSession(chat.id, editingSessionTitle);
-                            if (e.key === 'Escape') setEditingSessionId(null);
-                          }}
-                          onClick={(e) => e.stopPropagation()}
-                        />
-                      ) : (
-                        <div className="flex flex-col">
-                          <span className="block truncate text-sm">
-                            {chat.title}
-                          </span>
-                          {chat.updatedAt && (
-                            <span className="block text-[10px] text-slate-500 mt-0.5 font-medium">
-                              {new Date(chat.updatedAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
-                            </span>
-                          )}
-                        </div>
-                      )}
-                    </button>
-
-                    <div className="flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity pr-1">
-                      <DropdownMenu>
-                        <DropdownMenuTrigger render={
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-7 w-7"
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            <MoreHorizontal className="h-3.5 w-3.5" />
-                          </Button>
-                        } />
-                        <DropdownMenuContent align="end" className="w-32">
-                          <DropdownMenuItem onClick={(e) => {
-                            e.stopPropagation();
-                            setEditingSessionId(chat.id);
-                            setEditingSessionTitle(chat.title);
-                          }}>
-                            <Pencil className="mr-2 h-3.5 w-3.5" />
-                            Rename
-                          </DropdownMenuItem>
-                          <DropdownMenuItem onClick={(e) => toggleFavoriteSession(e, chat.id)}>
-                            <Star className={`mr-2 h-3.5 w-3.5 ${chat.isFavorite ? "fill-current text-amber-500" : ""}`} />
-                            {chat.isFavorite ? "Unfavorite" : "Favorite"}
-                          </DropdownMenuItem>
-                          <DropdownMenuSeparator />
-                          <DropdownMenuItem
-                            className="text-red-600 focus:text-red-600 focus:bg-red-50 dark:focus:bg-red-950/30"
-                            onClick={(e) => {
-                               e.stopPropagation();
-                               deleteSession(e as unknown as React.MouseEvent, chat.id);
+                      <button
+                        onClick={() => loadSession(chat.id)}
+                        className={`flex-1 text-left px-3 py-2.5 min-w-0 ${chat.active ? "text-foreground font-medium" : "text-muted-foreground hover:text-foreground"}`}
+                      >
+                        {editingSessionId === chat.id ? (
+                          <input
+                            autoFocus
+                            className="w-full bg-background border rounded px-1.5 py-0.5 text-sm outline-none focus:ring-1 focus:ring-blue-500"
+                            value={editingSessionTitle}
+                            onChange={(e) => setEditingSessionTitle(e.target.value)}
+                            onBlur={() => handleRenameSession(chat.id, editingSessionTitle)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') handleRenameSession(chat.id, editingSessionTitle);
+                              if (e.key === 'Escape') setEditingSessionId(null);
                             }}
-                          >
-                            <Trash2 className="mr-2 h-3.5 w-3.5" />
-                            Delete
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
+                            onClick={(e) => e.stopPropagation()}
+                          />
+                        ) : (
+                          <div className="flex flex-col">
+                            <span className="block truncate text-sm">
+                              {chat.title}
+                            </span>
+                            {chat.updatedAt && (
+                              <span className="block text-[10px] text-slate-500 mt-0.5 font-medium">
+                                {new Date(chat.updatedAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </button>
+
+                      <div className="flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity pr-1">
+                        <DropdownMenu>
+                          <DropdownMenuTrigger render={
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <MoreHorizontal className="h-3.5 w-3.5" />
+                            </Button>
+                          } />
+                          <DropdownMenuContent align="end" className="w-32">
+                            <DropdownMenuItem onClick={(e) => {
+                              e.stopPropagation();
+                              setEditingSessionId(chat.id);
+                              setEditingSessionTitle(chat.title);
+                            }}>
+                              <Pencil className="mr-2 h-3.5 w-3.5" />
+                              Rename
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={(e) => toggleFavoriteSession(e, chat.id)}>
+                              <Star className={`mr-2 h-3.5 w-3.5 ${chat.isFavorite ? "fill-current text-amber-500" : ""}`} />
+                              {chat.isFavorite ? "Unfavorite" : "Favorite"}
+                            </DropdownMenuItem>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem
+                              className="text-red-600 focus:text-red-600 focus:bg-red-50 dark:focus:bg-red-950/30"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                deleteSession(e as unknown as React.MouseEvent, chat.id);
+                              }}
+                            >
+                              <Trash2 className="mr-2 h-3.5 w-3.5" />
+                              Delete
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  ))}
               </div>
               <button className="w-full text-left px-3 py-2 text-xs text-blue-600 dark:text-blue-400 hover:underline mt-2">
                 View all chats →
@@ -1506,9 +1506,8 @@ export default function ChatPage() {
             {/* Dynamic Drag Handle */}
             <div
               onMouseDown={startResizingHistory}
-              className={`absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-indigo-500/60 z-50 transition-all ${
-                isResizingHistory ? "bg-indigo-650 w-[3px] border-r-2 border-indigo-400" : "bg-transparent hover:w-1.5"
-              }`}
+              className={`absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-indigo-500/60 z-50 transition-all ${isResizingHistory ? "bg-indigo-650 w-[3px] border-r-2 border-indigo-400" : "bg-transparent hover:w-1.5"
+                }`}
             />
           </motion.div>
         )}
@@ -1548,7 +1547,7 @@ export default function ChatPage() {
           </div>
           <div className="flex flex-wrap items-center gap-3 sm:gap-4 justify-start md:justify-end w-full md:w-auto">
             <div className="flex items-center gap-2 text-sm">
-              <Label htmlFor="provider-select" className="text-xs text-muted-foreground hidden lg:inline">
+              <Label htmlFor="provider-select" className="text-xs font-bold text-slate-900 dark:text-slate-200 hidden lg:inline">
                 AI Provider:
               </Label>
               <Select value={provider} onValueChange={(val) => {
@@ -1558,7 +1557,7 @@ export default function ChatPage() {
                 else if (val === "anthropic") setModel("claude-3-5-sonnet");
                 else if (val === "deepseek") setModel("deepseek-v4-pro");
               }}>
-                <SelectTrigger className="h-8 w-32 text-xs">
+                <SelectTrigger className="h-8 w-32 text-xs text-slate-900 dark:text-slate-200">
                   <SelectValue placeholder="Provider" />
                 </SelectTrigger>
                 <SelectContent>
@@ -1571,7 +1570,7 @@ export default function ChatPage() {
             </div>
             <div className="flex items-center gap-2 text-sm">
               <Select value={model} onValueChange={setModel}>
-                <SelectTrigger className="h-8 w-40 text-xs">
+                <SelectTrigger className="h-8 w-40 text-xs text-slate-900 dark:text-slate-200">
                   <SelectValue placeholder="Model" />
                 </SelectTrigger>
                 <SelectContent>
@@ -1603,11 +1602,11 @@ export default function ChatPage() {
               </Select>
             </div>
             <div className="flex items-center gap-2 text-sm">
-              <Label htmlFor="project-select" className="text-xs text-muted-foreground hidden lg:inline">
+              <Label htmlFor="project-select" className="text-xs font-bold text-slate-900 dark:text-slate-200 hidden lg:inline">
                 Project:
               </Label>
               <Select value={selectedProject} onValueChange={setSelectedProject}>
-                <SelectTrigger className="h-8 w-44 text-xs">
+                <SelectTrigger className="h-8 w-44 text-xs text-slate-900 dark:text-slate-200">
                   <SelectValue placeholder="Select Project">
                     {projects.find(p => p.id === selectedProject)?.title || "Select Project"}
                   </SelectValue>
@@ -1623,13 +1622,13 @@ export default function ChatPage() {
               </Select>
             </div>
             <div className="flex items-center gap-2 text-sm">
-              <Label htmlFor="db-select" className="text-xs text-muted-foreground hidden lg:inline">
+              <Label htmlFor="db-select" className="text-xs font-bold text-slate-900 dark:text-slate-200 hidden lg:inline">
                 Database:
               </Label>
               <DropdownMenu>
                 <DropdownMenuTrigger render={
-                  <Button variant="outline" className="h-8 w-44 text-xs flex justify-between items-center px-3 border-slate-800 bg-slate-900 text-white hover:bg-slate-850 hover:text-white rounded-xl">
-                    <span className="truncate max-w-[120px]">
+                  <Button variant="outline" className="font-normal h-8 w-44 text-xs flex justify-between items-center px-3 border-slate-200 dark:border-slate-800 bg-white dark:bg-transparent text-slate-900 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-850 hover:text-slate-900 dark:hover:text-white rounded-xl">
+                    <span className={`truncate max-w-[120px] ${(!selectedDbs.length && !selectedDb) ? "text-slate-500 font-normal" : ""}`}>
                       {selectedDbs.length > 0 ? (
                         selectedDbs.map(id => databases.find(db => db.id === id)?.name).filter(Boolean).join(", ")
                       ) : selectedDb ? (
@@ -1641,9 +1640,9 @@ export default function ChatPage() {
                     <ChevronDown className="h-3 w-3 opacity-60 ml-1.5 flex-shrink-0" />
                   </Button>
                 } />
-                <DropdownMenuContent className="bg-slate-900 border-slate-800 text-white w-48">
+                <DropdownMenuContent className="bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-900 dark:text-white w-48">
                   {filteredDatabases.length > 0 && (
-                    <div 
+                    <div
                       onClick={(e) => {
                         e.stopPropagation();
                         if (selectedDbs.length === filteredDatabases.length) {
@@ -1655,16 +1654,16 @@ export default function ChatPage() {
                           if (allIds.length > 0) setSelectedDb(allIds[0]);
                         }
                       }}
-                      className="cursor-pointer hover:bg-slate-800 text-xs flex items-center justify-between py-2 px-3 rounded-lg transition-colors select-none text-white w-full"
+                      className="cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 text-xs flex items-center justify-between py-2 px-3 rounded-lg transition-colors select-none text-slate-900 dark:text-white w-full"
                     >
                       <span className="font-semibold text-indigo-400">🌐 Select All</span>
-                      <Switch 
+                      <Switch
                         checked={selectedDbs.length === filteredDatabases.length && filteredDatabases.length > 0}
                         className="pointer-events-none data-[state=checked]:bg-indigo-600 scale-75"
                       />
                     </div>
                   )}
-                  {filteredDatabases.length > 0 && <DropdownMenuSeparator className="bg-slate-800" />}
+                  {filteredDatabases.length > 0 && <DropdownMenuSeparator className="bg-slate-200 dark:bg-slate-800" />}
                   {filteredDatabases.map((db) => {
                     const isChecked = selectedDbs.includes(db.id) || (selectedDbs.length === 0 && selectedDb === db.id);
                     return (
@@ -1686,13 +1685,13 @@ export default function ChatPage() {
                             setSelectedDb("");
                           }
                         }}
-                        className="cursor-pointer hover:bg-slate-800 text-xs flex items-center justify-between py-2 px-3 rounded-lg transition-colors select-none text-white w-full"
+                        className="cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 text-xs flex items-center justify-between py-2 px-3 rounded-lg transition-colors select-none text-slate-900 dark:text-white w-full"
                       >
                         <span className="flex items-center gap-1.5">
                           <span>{db.type === 'postgresql' ? '🐘' : db.type === 'mysql' ? '🐬' : db.type === 'mongodb' ? '🍃' : '🪶'}</span>
                           <span>{db.name}</span>
                         </span>
-                        <Switch 
+                        <Switch
                           checked={isChecked}
                           className="pointer-events-none data-[state=checked]:bg-indigo-600 scale-75"
                         />
@@ -1708,7 +1707,7 @@ export default function ChatPage() {
               </DropdownMenu>
             </div>
             <div className="flex items-center gap-2">
-              <Label htmlFor="show-sql" className="text-xs text-muted-foreground hidden sm:inline">
+              <Label htmlFor="show-sql" className="text-xs font-bold text-slate-900 dark:text-slate-200 hidden sm:inline">
                 Show Generated SQL
               </Label>
               <Switch
@@ -1742,8 +1741,8 @@ export default function ChatPage() {
                   <div className={`max-w-[80%] space-y-3 ${msg.role === "user" ? "items-end" : "items-start"}`}>
                     <div
                       className={`relative rounded-2xl px-4 py-3 ${msg.role === "user"
-                        ? "bg-gradient-to-br from-blue-600 to-blue-700 text-white rounded-tr-md ml-auto shadow-md shadow-blue-500/10"
-                        : "bg-muted rounded-tl-md"
+                        ? "bg-gradient-to-br from-indigo-500 to-indigo-600 dark:from-indigo-600 dark:to-indigo-700 text-white rounded-tr-md ml-auto shadow-md shadow-indigo-500/30 border border-indigo-400/20"
+                        : "bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-tl-md shadow-sm"
                         }`}
                     >
                       {editingMessageId === msg.id ? (
@@ -1751,20 +1750,20 @@ export default function ChatPage() {
                           <Textarea
                             value={editValue}
                             onChange={(e) => setEditValue(e.target.value)}
-                            className="bg-white/10 border-white/20 text-white placeholder:text-white/50 text-sm focus-visible:ring-white/30"
+                            className="bg-white/10 border-white/20 text-slate-900 dark:text-white placeholder:text-slate-500 dark:placeholder:text-white/50 text-sm focus-visible:ring-white/30"
                             autoFocus
                           />
                           <div className="flex justify-end gap-2">
-                            <Button size="sm" variant="ghost" className="h-7 text-xs text-white hover:bg-white/10" onClick={() => setEditingMessageId(null)}>
+                            <Button size="sm" variant="ghost" className="h-7 text-xs text-slate-700 dark:text-white hover:bg-black/10 dark:hover:bg-white/10" onClick={() => setEditingMessageId(null)}>
                               Cancel
                             </Button>
-                            <Button size="sm" className="h-7 text-xs bg-white text-blue-600 hover:bg-white/90" onClick={() => handleSaveEdit(msg.id)}>
+                            <Button size="sm" className="h-7 text-xs bg-indigo-600 dark:bg-white text-white dark:text-blue-600 hover:bg-indigo-700 dark:hover:bg-white/90" onClick={() => handleSaveEdit(msg.id)}>
                               Save & Submit
                             </Button>
                           </div>
                         </div>
                       ) : (
-                        <p className="text-sm leading-relaxed">{msg.content}</p>
+                        <p className={`text-sm leading-relaxed ${msg.role === "user" ? "!text-white font-medium" : "text-slate-800 dark:text-slate-200"}`}>{msg.content}</p>
                       )}
                     </div>
 
@@ -1815,11 +1814,10 @@ export default function ChatPage() {
                         </button>
                         <button
                           onClick={() => toggleFavoriteMessage(msg)}
-                          className={`p-1 hover:bg-muted rounded transition-colors ${
-                            isMessageFavorited(msg)
+                          className={`p-1 hover:bg-muted rounded transition-colors ${isMessageFavorited(msg)
                               ? "text-amber-500 hover:text-amber-600"
                               : "text-muted-foreground hover:text-amber-500"
-                          }`}
+                            }`}
                           title={isMessageFavorited(msg) ? "Remove from Favourite" : "Save as Favourite"}
                         >
                           <Star className={`h-3.5 w-3.5 ${isMessageFavorited(msg) ? "fill-current" : ""}`} />
@@ -1852,11 +1850,10 @@ export default function ChatPage() {
                             <Button
                               variant="ghost"
                               size="sm"
-                              className={`h-7 text-[10px] gap-1.5 px-2.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-850 transition-colors ${
-                                isMessageFavorited(msg)
+                              className={`h-7 text-[10px] gap-1.5 px-2.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-850 transition-colors ${isMessageFavorited(msg)
                                   ? "text-indigo-500 font-black bg-indigo-500/10 hover:bg-indigo-500/15"
                                   : "text-muted-foreground hover:text-slate-900 dark:hover:text-white"
-                              }`}
+                                }`}
                               onClick={() => handleToggleSave(msg)}
                               title={isMessageFavorited(msg) ? "Saved to Queries" : "Save Query"}
                             >
@@ -1896,7 +1893,7 @@ export default function ChatPage() {
                                     {msg.tableData.rows.slice(0, 3).map((row, i) => (
                                       <tr key={i} className="border-t hover:bg-muted/30 transition-colors">
                                         {row.slice(0, 3).map((cell, j) => (
-                                          <td key={j} className="px-4 py-2.5 text-xs">
+                                          <td key={j} className="px-4 py-2.5 text-xs text-slate-800 dark:text-slate-200">
                                             {cell}
                                           </td>
                                         ))}
@@ -1953,7 +1950,7 @@ export default function ChatPage() {
               <div className="flex flex-col items-center justify-center min-h-[50vh] text-center px-4 py-8">
                 {databases.filter(db => db.is_default).length === 0 ? (
                   /* Case 1: No connected databases */
-                  <motion.div 
+                  <motion.div
                     initial={{ opacity: 0, y: 20 }}
                     animate={{ opacity: 1, y: 0 }}
                     className="max-w-md p-8 rounded-3xl bg-slate-900/40 border border-slate-800 shadow-2xl flex flex-col items-center"
@@ -1973,7 +1970,7 @@ export default function ChatPage() {
                   </motion.div>
                 ) : (
                   /* Case 2: Welcoming screen with active database selector hint */
-                  <motion.div 
+                  <motion.div
                     initial={{ opacity: 0, y: 20 }}
                     animate={{ opacity: 1, y: 0 }}
                     className="max-w-2xl flex flex-col items-center"
@@ -1987,19 +1984,19 @@ export default function ChatPage() {
                     <p className="text-sm text-slate-400 max-w-md mb-8 leading-relaxed">
                       Ask natural language questions to generate SQL queries and visualize your tables instantly.
                     </p>
-                    
+
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 w-full text-left">
                       <div className="p-5 rounded-2xl bg-slate-900/30 border border-slate-800/80 hover:border-slate-700 transition-colors">
                         <div className="h-8 w-8 rounded-lg bg-indigo-500/10 flex items-center justify-center text-indigo-400 mb-3 font-bold text-sm">1</div>
-                        <h4 className="text-sm font-bold text-white mb-1">Select Database</h4>
-                        <p className="text-xs text-slate-400 leading-relaxed">
+                        <h4 className="text-sm font-bold text-slate-900 dark:text-white mb-1">Select Database</h4>
+                        <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
                           Choose an active connection from the dropdown in the header.
                         </p>
                       </div>
                       <div className="p-5 rounded-2xl bg-slate-900/30 border border-slate-800/80 hover:border-slate-700 transition-colors">
                         <div className="h-8 w-8 rounded-lg bg-indigo-500/10 flex items-center justify-center text-indigo-400 mb-3 font-bold text-sm">2</div>
-                        <h4 className="text-sm font-bold text-white mb-1">Ask Anything</h4>
-                        <p className="text-xs text-slate-400 leading-relaxed">
+                        <h4 className="text-sm font-bold text-slate-900 dark:text-white mb-1">Ask Anything</h4>
+                        <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
                           Type queries like "Show the top 5 products by revenue" or "Analyze active users".
                         </p>
                       </div>
@@ -2044,8 +2041,8 @@ export default function ChatPage() {
                     )}
                     <span className="font-semibold truncate max-w-[200px]">{attachedFile.name}</span>
                     <span className="text-[10px] text-indigo-300">({(attachedFile.size / 1024).toFixed(1)} KB)</span>
-                    <button 
-                      onClick={() => setAttachedFile(null)} 
+                    <button
+                      onClick={() => setAttachedFile(null)}
                       className="hover:text-white hover:bg-indigo-900/50 rounded-full p-0.5 transition-colors ml-1"
                     >
                       <X className="h-3 w-3" />
@@ -2053,10 +2050,10 @@ export default function ChatPage() {
                   </div>
                 )}
                 <div className="flex items-end w-full">
-                  <Button 
+                  <Button
                     onClick={handleGenerate}
-                    variant="ghost" 
-                    size="icon" 
+                    variant="ghost"
+                    size="icon"
                     className="h-10 w-10 text-slate-500 hover:text-indigo-500 m-2"
                   >
                     <Sparkles className="h-5 w-5" />
@@ -2067,7 +2064,7 @@ export default function ChatPage() {
                     onChange={(e) => setInput(e.target.value)}
                     onKeyDown={handleKeyDown}
                     placeholder="Ask a question about your data..."
-                    className="flex-1 min-h-[56px] max-h-48 resize-none border-0 bg-transparent focus-visible:ring-0 shadow-none py-4 px-0 text-sm text-white placeholder:text-slate-600 font-medium"
+                    className="flex-1 min-h-[56px] max-h-48 resize-none border-0 bg-transparent focus-visible:ring-0 shadow-none py-4 px-0 text-sm text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-600 font-medium"
                     rows={1}
                   />
                   <div className="flex items-center gap-2 p-2">
@@ -2078,34 +2075,33 @@ export default function ChatPage() {
                       className="hidden"
                       accept=".txt,.csv,.json,.sql,.md"
                     />
-                    <Button 
+                    <Button
                       onClick={toggleListening}
-                      variant="ghost" 
-                      size="icon" 
-                      className={`h-10 w-10 rounded-xl transition-all ${
-                        isListening 
-                          ? "text-red-500 bg-red-500/10 hover:bg-red-500/20 hover:text-red-600 animate-pulse border border-red-500/30" 
+                      variant="ghost"
+                      size="icon"
+                      className={`h-10 w-10 rounded-xl transition-all ${isListening
+                          ? "text-red-500 bg-red-500/10 hover:bg-red-500/20 hover:text-red-600 animate-pulse border border-red-500/30"
                           : "text-slate-500 hover:text-white"
-                      }`}
+                        }`}
                     >
                       {isListening ? <MicOff className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
                     </Button>
                     <DropdownMenu>
                       <DropdownMenuTrigger render={
-                        <Button 
-                          variant="ghost" 
-                          size="icon" 
-                          className="h-10 w-10 text-slate-500 hover:text-white rounded-xl"
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-10 w-10 text-slate-500 hover:text-slate-900 dark:hover:text-white rounded-xl"
                         >
                           <Plus className="h-5 w-5" />
                         </Button>
                       } />
-                      <DropdownMenuContent align="end" className="bg-slate-900 border-slate-800 text-white w-48 mb-2 p-1.5 rounded-xl shadow-2xl z-[100]">
-                        <DropdownMenuItem onClick={handleAttachFile} className="cursor-pointer hover:bg-slate-800 focus:bg-slate-800 text-xs flex items-center gap-2.5 py-2 px-3 rounded-lg text-slate-300">
+                      <DropdownMenuContent align="end" className="bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-900 dark:text-white w-48 mb-2 p-1.5 rounded-xl shadow-2xl z-[100]">
+                        <DropdownMenuItem onClick={handleAttachFile} className="cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 focus:bg-slate-100 dark:focus:bg-slate-800 text-xs flex items-center gap-2.5 py-2 px-3 rounded-lg text-slate-700 dark:text-slate-300">
                           <Plus className="h-4 w-4 text-emerald-400" />
                           <span>Upload files</span>
                         </DropdownMenuItem>
-                        <DropdownMenuItem onClick={startCamera} className="cursor-pointer hover:bg-slate-800 focus:bg-slate-800 text-xs flex items-center gap-2.5 py-2 px-3 rounded-lg text-slate-300">
+                        <DropdownMenuItem onClick={startCamera} className="cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800 focus:bg-slate-100 dark:focus:bg-slate-800 text-xs flex items-center gap-2.5 py-2 px-3 rounded-lg text-slate-700 dark:text-slate-300">
                           <Camera className="h-4 w-4 text-amber-400" />
                           <span>Camera</span>
                         </DropdownMenuItem>
@@ -2160,14 +2156,13 @@ export default function ChatPage() {
             {/* Dynamic Drag Handle */}
             <div
               onMouseDown={startResizingSummary}
-              className={`absolute left-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-indigo-500/60 z-50 transition-all ${
-                isResizingSummary ? "bg-indigo-650 w-[3px] border-l-2 border-indigo-400" : "bg-transparent hover:w-1.5"
-              }`}
+              className={`absolute left-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-indigo-500/60 z-50 transition-all ${isResizingSummary ? "bg-indigo-650 w-[3px] border-l-2 border-indigo-400" : "bg-transparent hover:w-1.5"
+                }`}
             />
             <div className="flex-1 overflow-auto p-8 space-y-10">
               {/* Header */}
               <div className="flex items-center justify-between">
-                <h2 className="text-xl font-black tracking-tight text-white uppercase tracking-widest">Summary</h2>
+                <h2 className="text-xl font-black tracking-tight text-slate-900 dark:text-white uppercase tracking-widest">Summary</h2>
 
                 <div className="flex items-center gap-3">
                   <Button variant="ghost" size="icon" className="h-9 w-9 text-slate-500 hover:text-white">
@@ -2191,7 +2186,7 @@ export default function ChatPage() {
                     <Database className="h-10 w-10 opacity-40 text-slate-400" />
                   </div>
                   <div className="text-center space-y-2">
-                    <h3 className="text-lg font-black text-white">No Tabular Data</h3>
+                    <h3 className="text-lg font-black text-slate-900 dark:text-white">No Tabular Data</h3>
                     <p className="text-sm max-w-xs leading-relaxed">The selected response does not contain any structured database results to visualize.</p>
                   </div>
                 </div>
@@ -2217,14 +2212,14 @@ export default function ChatPage() {
                 </Card>
               ) : useBullets ? (
                 <Card className="p-8 bg-[var(--surface-1)] border-slate-900/50 shadow-2xl rounded-[28px] border-none">
-                  <h3 className="text-sm font-black text-white uppercase tracking-widest mb-6 border-b border-slate-800/50 pb-4">
+                  <h3 className="text-sm font-black text-slate-900 dark:text-white uppercase tracking-widest mb-6 border-b border-slate-200 dark:border-slate-800/50 pb-4">
                     {isObjectRow ? resultColumns[0] : "Items"} List
                   </h3>
                   <ul className="space-y-4 max-h-[60vh] overflow-y-auto pr-4 custom-scrollbar">
                     {resultsData.map((row: any, i: number) => {
                       const val = isObjectRow ? row[resultColumns[0]] : row;
                       return (
-                        <li key={i} className="flex items-center gap-4 text-sm text-slate-300 font-medium p-3 bg-slate-900/30 rounded-xl border border-white/5 hover:border-indigo-500/30 transition-colors">
+                        <li key={i} className="flex items-center gap-4 text-sm text-slate-700 dark:text-slate-300 font-medium p-3 bg-slate-900/5 dark:bg-slate-900/30 rounded-xl border border-slate-200 dark:border-white/5 hover:border-indigo-500/30 transition-colors">
                           <div className="h-2 w-2 rounded-full bg-indigo-500 shadow-[0_0_8px_var(--color-indigo-500)] flex-shrink-0" />
                           <span className="break-all">{String(val)}</span>
                         </li>
@@ -2235,7 +2230,7 @@ export default function ChatPage() {
               ) : (
                 <Card className="bg-[var(--surface-1)] border-slate-900/50 shadow-2xl rounded-[28px] overflow-hidden border-none flex flex-col h-full max-h-[80vh]">
                   <div className="flex items-center justify-between px-8 py-5 border-b border-slate-800/50 flex-shrink-0">
-                    <h3 className="text-sm font-black text-white uppercase tracking-widest">Query Results</h3>
+                    <h3 className="text-sm font-black text-slate-900 dark:text-white uppercase tracking-widest">Query Results</h3>
                     <Button variant="ghost" size="sm" className="h-8 text-[11px] font-black gap-2 px-4 text-slate-400 hover:text-white bg-[var(--surface-2)] border border-slate-800 rounded-xl">
                       <Download className="h-4 w-4" />
                       Export
@@ -2244,7 +2239,7 @@ export default function ChatPage() {
                   <div className="overflow-x-auto flex-1 custom-scrollbar">
                     <table className="w-full text-xs">
                       <thead className="sticky top-0 bg-[var(--surface-1)] z-10 shadow-sm shadow-black/20">
-                        <tr className="bg-slate-900/20 text-slate-500 uppercase tracking-[0.15em] text-[10px] font-black">
+                        <tr className="bg-slate-100 dark:bg-slate-900/20 text-slate-600 dark:text-slate-500 uppercase tracking-[0.15em] text-[10px] font-black">
                           {resultColumns.map((col, i) => (
                             <th key={i} className="text-left px-8 py-5 whitespace-nowrap">{col}</th>
                           ))}
@@ -2254,7 +2249,7 @@ export default function ChatPage() {
                         {resultsData.map((row: any, i: number) => (
                           <tr key={i} className="hover:bg-white/5 transition-colors cursor-pointer group">
                             {resultColumns.map((col, j) => (
-                              <td key={j} className="px-8 py-5 text-slate-300 font-medium whitespace-nowrap max-w-[300px] truncate" title={String(row[col])}>
+                              <td key={j} className="px-8 py-5 text-slate-700 dark:text-slate-300 font-medium whitespace-nowrap max-w-[300px] truncate" title={String(row[col])}>
                                 {String(row[col])}
                               </td>
                             ))}
@@ -2280,7 +2275,7 @@ export default function ChatPage() {
         {showWarningModal && currentProject && disconnectedProjectDbs.length > 0 && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
             {/* Blurry Backdrop Filter */}
-            <motion.div 
+            <motion.div
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
@@ -2292,15 +2287,15 @@ export default function ChatPage() {
             />
 
             {/* Modal Dialog Box */}
-            <motion.div 
+            <motion.div
               initial={{ opacity: 0, scale: 0.95, y: 15 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 15 }}
               transition={{ type: "spring", duration: 0.4 }}
-              className="relative bg-[var(--surface-1)] border border-slate-800 rounded-3xl w-full max-w-md shadow-2xl p-8 z-55 flex flex-col max-h-[85vh] text-white"
+              className="relative bg-white dark:bg-[var(--surface-1)] border border-slate-200 dark:border-slate-800 rounded-3xl w-full max-w-md shadow-2xl p-8 z-55 flex flex-col max-h-[85vh] text-slate-900 dark:text-white"
             >
               {/* Close Button */}
-              <button 
+              <button
                 onClick={() => {
                   setShowWarningModal(false);
                   setActiveConfigDb(null);
@@ -2315,14 +2310,14 @@ export default function ChatPage() {
                 <>
                   {/* Back button and title */}
                   <div className="mb-6 flex items-center gap-3">
-                    <button 
+                    <button
                       onClick={() => setActiveConfigDb(null)}
                       className="text-slate-400 hover:text-white p-1 hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
                     >
                       <ArrowLeft className="h-5 w-5" />
                     </button>
                     <div>
-                      <h3 className="text-xl font-bold text-white leading-tight">
+                      <h3 className="text-xl font-bold text-slate-900 dark:text-white leading-tight">
                         Configure Database
                       </h3>
                       <p className="text-xs text-slate-400 mt-1 font-medium">
@@ -2357,22 +2352,20 @@ export default function ChatPage() {
                         <button
                           type="button"
                           onClick={() => setConnectionMethod('string')}
-                          className={`px-3 py-1.5 text-[10px] font-bold rounded-md transition-all cursor-pointer ${
-                            connectionMethod === 'string' 
-                              ? 'bg-indigo-600 text-white' 
+                          className={`px-3 py-1.5 text-[10px] font-bold rounded-md transition-all cursor-pointer ${connectionMethod === 'string'
+                              ? 'bg-indigo-600 text-white'
                               : 'text-slate-400 hover:text-white'
-                          }`}
+                            }`}
                         >
                           URI String
                         </button>
                         <button
                           type="button"
                           onClick={() => setConnectionMethod('params')}
-                          className={`px-3 py-1.5 text-[10px] font-bold rounded-md transition-all cursor-pointer ${
-                            connectionMethod === 'params' 
-                              ? 'bg-indigo-600 text-white' 
+                          className={`px-3 py-1.5 text-[10px] font-bold rounded-md transition-all cursor-pointer ${connectionMethod === 'params'
+                              ? 'bg-indigo-600 text-white'
                               : 'text-slate-400 hover:text-white'
-                          }`}
+                            }`}
                         >
                           Form Parameters
                         </button>
@@ -2384,7 +2377,7 @@ export default function ChatPage() {
                         {/* Host */}
                         <div className="col-span-2 space-y-1.5">
                           <label className="text-[10px] font-bold text-slate-450 uppercase tracking-wider">Host</label>
-                          <Input 
+                          <Input
                             value={host}
                             onChange={(e) => setHost(e.target.value)}
                             placeholder="localhost"
@@ -2394,7 +2387,7 @@ export default function ChatPage() {
                         {/* Port */}
                         <div className="space-y-1.5">
                           <label className="text-[10px] font-bold text-slate-450 uppercase tracking-wider">Port</label>
-                          <Input 
+                          <Input
                             value={port}
                             onChange={(e) => setPort(e.target.value)}
                             placeholder={String(getDefaultPort(dbType))}
@@ -2405,7 +2398,7 @@ export default function ChatPage() {
                         {/* Database Name */}
                         <div className="space-y-1.5">
                           <label className="text-[10px] font-bold text-slate-450 uppercase tracking-wider">Database Name</label>
-                          <Input 
+                          <Input
                             value={databaseName}
                             onChange={(e) => setDatabaseName(e.target.value)}
                             placeholder="e.g., main_db"
@@ -2415,7 +2408,7 @@ export default function ChatPage() {
                         {/* Username */}
                         <div className="space-y-1.5">
                           <label className="text-[10px] font-bold text-slate-455 uppercase tracking-wider">Username</label>
-                          <Input 
+                          <Input
                             value={username}
                             onChange={(e) => setUsername(e.target.value)}
                             placeholder="postgres"
@@ -2425,7 +2418,7 @@ export default function ChatPage() {
                         {/* Password */}
                         <div className="space-y-1.5">
                           <label className="text-[10px] font-bold text-slate-455 uppercase tracking-wider">Password</label>
-                          <Input 
+                          <Input
                             type="password"
                             value={password}
                             onChange={(e) => setPassword(e.target.value)}
@@ -2437,7 +2430,7 @@ export default function ChatPage() {
                     ) : (
                       <div className="space-y-2 pt-2">
                         <label className="text-[10px] font-bold text-slate-455 uppercase tracking-wider">Connection String (URI)</label>
-                        <Input 
+                        <Input
                           value={connectionString}
                           onChange={(e) => setConnectionString(e.target.value)}
                           placeholder={`${dbType}://username:password@host:port/database`}
@@ -2447,11 +2440,10 @@ export default function ChatPage() {
                     )}
 
                     {testResult && (
-                      <div className={`p-4 rounded-xl flex items-start gap-3 border ${
-                        testResult.status === 'success' 
+                      <div className={`p-4 rounded-xl flex items-start gap-3 border ${testResult.status === 'success'
                           ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
                           : 'bg-rose-500/10 border-rose-500/20 text-rose-400'
-                      }`}>
+                        }`}>
                         {testResult.status === 'success' ? <CheckCircle2 className="h-5 w-5 mt-0.5 shrink-0" /> : <AlertCircle className="h-5 w-5 mt-0.5 shrink-0" />}
                         <p className="text-xs font-medium leading-relaxed">{testResult.message}</p>
                       </div>
@@ -2460,14 +2452,14 @@ export default function ChatPage() {
 
                   {/* Actions Footer */}
                   <div className="flex items-center gap-3 pt-6 mt-4 border-t border-slate-800/50">
-                    <Button 
-                      variant="ghost" 
+                    <Button
+                      variant="ghost"
                       onClick={() => setActiveConfigDb(null)}
                       className="w-1/3 text-slate-400 hover:text-white hover:bg-slate-805 h-11 rounded-xl font-bold cursor-pointer"
                     >
                       Back
                     </Button>
-                    <Button 
+                    <Button
                       onClick={handleTestConnection}
                       disabled={isTesting || isSaving || (connectionMethod === 'string' ? !connectionString : !databaseName)}
                       className="w-1/3 bg-slate-900 border border-slate-800 hover:bg-slate-800 text-white font-bold h-11 rounded-xl cursor-pointer disabled:opacity-50"
@@ -2481,7 +2473,7 @@ export default function ChatPage() {
                         "Test"
                       )}
                     </Button>
-                    <Button 
+                    <Button
                       onClick={handleSaveConnection}
                       disabled={isSaving || isTesting || !testResult || testResult.status !== 'success'}
                       className="w-1/3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold h-11 rounded-xl shadow-lg shadow-indigo-600/20 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer transition-all duration-200"
@@ -2521,7 +2513,7 @@ export default function ChatPage() {
                     <div className="space-y-2">
                       <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">Disconnected Databases</label>
                       {disconnectedProjectDbs.map((db: any) => (
-                        <div 
+                        <div
                           key={db.id}
                           className="flex items-center justify-between p-3.5 rounded-xl border border-rose-500/20 bg-rose-500/5 text-slate-350"
                         >
@@ -2532,7 +2524,7 @@ export default function ChatPage() {
                               <span className="text-[10px] text-slate-500 font-bold mt-0.5">{db.type}</span>
                             </div>
                           </div>
-                          
+
                           <div className="flex items-center gap-2">
                             <button
                               onClick={() => startConfigDb(db)}
@@ -2558,7 +2550,7 @@ export default function ChatPage() {
                       <div className="space-y-2 pt-2">
                         <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">Connected Databases</label>
                         {connectedProjectDbs.map((db: any) => (
-                          <div 
+                          <div
                             key={db.id}
                             className="flex items-center justify-between p-3.5 rounded-xl border border-emerald-500/20 bg-emerald-500/5 text-slate-350"
                           >
@@ -2569,7 +2561,7 @@ export default function ChatPage() {
                                 <span className="text-[10px] text-slate-500 font-bold mt-0.5">{db.type}</span>
                               </div>
                             </div>
-                            
+
                             <div className="flex items-center gap-2">
                               <button
                                 onClick={() => startConfigDb(db)}
@@ -2591,16 +2583,16 @@ export default function ChatPage() {
 
                   {/* Actions Footer */}
                   <div className="flex flex-col gap-3 pt-6 mt-4 border-t border-slate-800/50">
-                    <Button 
+                    <Button
                       onClick={() => setShowWarningModal(false)}
                       className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold h-11 rounded-xl shadow-lg shadow-indigo-600/20 cursor-pointer"
                     >
-                      {connectedProjectDbs.length > 0 
-                        ? "Proceed with Connected Databases" 
+                      {connectedProjectDbs.length > 0
+                        ? "Proceed with Connected Databases"
                         : "Proceed Anyway"}
                     </Button>
-                    <Button 
-                      variant="ghost" 
+                    <Button
+                      variant="ghost"
                       onClick={() => {
                         if (disconnectedProjectDbs.length > 0) {
                           startConfigDb(disconnectedProjectDbs[0]);
@@ -2623,7 +2615,7 @@ export default function ChatPage() {
       <AnimatePresence>
         {isCameraOpen && (
           <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[999] flex items-center justify-center p-4">
-            <motion.div 
+            <motion.div
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
@@ -2634,7 +2626,7 @@ export default function ChatPage() {
                   <Camera className="h-5 w-5 text-indigo-400" />
                   Capture Photo
                 </h3>
-                <button 
+                <button
                   onClick={stopCamera}
                   className="text-slate-400 hover:text-white rounded-full p-1 transition-colors"
                 >
@@ -2643,10 +2635,10 @@ export default function ChatPage() {
               </div>
 
               <div className="relative rounded-2xl overflow-hidden bg-slate-950 aspect-video flex items-center justify-center border border-slate-800">
-                <video 
-                  ref={videoRef} 
-                  autoPlay 
-                  playsInline 
+                <video
+                  ref={videoRef}
+                  autoPlay
+                  playsInline
                   className="w-full h-full object-cover scale-x-[-1]"
                 />
                 {!cameraStream && (
@@ -2658,14 +2650,14 @@ export default function ChatPage() {
               </div>
 
               <div className="flex items-center justify-end gap-3 pt-2">
-                <Button 
+                <Button
                   onClick={stopCamera}
                   variant="ghost"
                   className="text-slate-400 hover:text-white cursor-pointer"
                 >
                   Cancel
-                </Button> 
-                <Button 
+                </Button>
+                <Button
                   onClick={captureSnapshot}
                   disabled={!cameraStream}
                   className="bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white rounded-xl shadow-lg shadow-indigo-600/20 cursor-pointer"

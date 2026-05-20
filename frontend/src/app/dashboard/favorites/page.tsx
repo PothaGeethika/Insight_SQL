@@ -208,7 +208,7 @@ export default function FavoritesPage() {
   };
 
   return (
-    <div className="h-full flex flex-col bg-[var(--surface-0)] text-slate-300 p-8 space-y-8 overflow-hidden">
+    <div className="h-full flex flex-col bg-[var(--surface-0)] text-slate-900 dark:text-slate-300 p-8 space-y-8 overflow-hidden">
       {/* Header Area */}
       <div className="flex items-center justify-between">
         <div className="space-y-1">
@@ -216,9 +216,9 @@ export default function FavoritesPage() {
             <div className="h-10 w-10 rounded-2xl bg-indigo-600/10 border border-indigo-500/20 flex items-center justify-center shadow-2xl">
               <Star className="h-5 w-5 text-indigo-500 fill-indigo-500 animate-pulse" />
             </div>
-            <h1 className="text-3xl font-black text-white tracking-tight">Favorites</h1>
+            <h1 className="text-3xl font-black text-slate-900 dark:text-white tracking-tight">Favorites</h1>
           </div>
-          <p className="text-slate-500 text-sm font-medium ml-1">Access your favorited databases, projects, questions, and session history.</p>
+          <p className="text-slate-600 dark:text-slate-500 text-sm font-medium ml-1">Access your favorited databases, projects, questions, and session history.</p>
         </div>
 
         <div className="flex items-center gap-3">
@@ -226,14 +226,14 @@ export default function FavoritesPage() {
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-600 group-focus-within:text-indigo-500 transition-colors" />
             <Input
               placeholder="Search favorites..."
-              className="w-64 bg-[var(--surface-1)] border-slate-800 focus:border-indigo-500/50 h-10 pl-10 text-sm rounded-xl transition-all text-white"
+              className="w-64 bg-[var(--surface-1)] border-slate-200 dark:border-slate-800 focus:border-indigo-500/50 h-10 pl-10 text-sm rounded-xl transition-all text-slate-900 dark:text-white"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
             />
           </div>
           <DropdownMenu>
             <DropdownMenuTrigger
-              className="inline-flex shrink-0 items-center justify-center bg-[var(--surface-1)] border border-slate-800 hover:bg-[var(--surface-2)] hover:text-white rounded-xl gap-2 text-xs font-black uppercase tracking-widest h-10 px-4 transition-colors"
+              className="inline-flex shrink-0 items-center justify-center bg-[var(--surface-1)] border border-slate-200 dark:border-slate-800 hover:bg-[var(--surface-2)] text-slate-800 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white rounded-xl gap-2 text-xs font-black uppercase tracking-widest h-10 px-4 transition-colors"
             >
               <Filter className="h-4 w-4" />
               Filter
@@ -241,26 +241,26 @@ export default function FavoritesPage() {
                 <Badge className="ml-1 px-1.5 h-5 bg-indigo-500 hover:bg-indigo-600 text-white border-none rounded">1</Badge>
               )}
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-56 bg-[var(--surface-1)] border-slate-800 text-slate-300">
+            <DropdownMenuContent align="end" className="w-56 bg-white dark:bg-[var(--surface-1)] border-slate-200 dark:border-slate-800 text-slate-900 dark:text-slate-300">
               <DropdownMenuGroup>
-                <DropdownMenuLabel className="font-black text-white text-xs uppercase tracking-widest">Sort By</DropdownMenuLabel>
+                <DropdownMenuLabel className="font-black text-slate-900 dark:text-white text-xs uppercase tracking-widest">Sort By</DropdownMenuLabel>
                 <DropdownMenuSeparator className="bg-slate-800" />
                 <DropdownMenuRadioGroup value={sortBy} onValueChange={setSortBy}>
-                  <DropdownMenuRadioItem value="newest" className="focus:bg-[var(--surface-2)] focus:text-white cursor-pointer">Newest First</DropdownMenuRadioItem>
-                  <DropdownMenuRadioItem value="oldest" className="focus:bg-[var(--surface-2)] focus:text-white cursor-pointer">Oldest First</DropdownMenuRadioItem>
-                  <DropdownMenuRadioItem value="az" className="focus:bg-[var(--surface-2)] focus:text-white cursor-pointer">Alphabetical (A-Z)</DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="newest" className="focus:bg-slate-100 dark:focus:bg-[var(--surface-2)] focus:text-slate-900 dark:focus:text-white cursor-pointer">Newest First</DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="oldest" className="focus:bg-slate-100 dark:focus:bg-[var(--surface-2)] focus:text-slate-900 dark:focus:text-white cursor-pointer">Oldest First</DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="az" className="focus:bg-slate-100 dark:focus:bg-[var(--surface-2)] focus:text-slate-900 dark:focus:text-white cursor-pointer">Alphabetical (A-Z)</DropdownMenuRadioItem>
                 </DropdownMenuRadioGroup>
               </DropdownMenuGroup>
 
               <DropdownMenuSeparator className="bg-slate-800 my-1" />
               
               <DropdownMenuGroup>
-                <DropdownMenuLabel className="font-black text-white text-xs uppercase tracking-widest">Date Added</DropdownMenuLabel>
+                <DropdownMenuLabel className="font-black text-slate-900 dark:text-white text-xs uppercase tracking-widest">Date Added</DropdownMenuLabel>
                 <DropdownMenuSeparator className="bg-slate-800" />
                 <DropdownMenuRadioGroup value={dateFilter} onValueChange={setDateFilter}>
-                  <DropdownMenuRadioItem value="all" className="focus:bg-[var(--surface-2)] focus:text-white cursor-pointer">All Time</DropdownMenuRadioItem>
-                  <DropdownMenuRadioItem value="today" className="focus:bg-[var(--surface-2)] focus:text-white cursor-pointer">Added Today</DropdownMenuRadioItem>
-                  <DropdownMenuRadioItem value="week" className="focus:bg-[var(--surface-2)] focus:text-white cursor-pointer">Last 7 Days</DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="all" className="focus:bg-slate-100 dark:focus:bg-[var(--surface-2)] focus:text-slate-900 dark:focus:text-white cursor-pointer">All Time</DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="today" className="focus:bg-slate-100 dark:focus:bg-[var(--surface-2)] focus:text-slate-900 dark:focus:text-white cursor-pointer">Added Today</DropdownMenuRadioItem>
+                  <DropdownMenuRadioItem value="week" className="focus:bg-slate-100 dark:focus:bg-[var(--surface-2)] focus:text-slate-900 dark:focus:text-white cursor-pointer">Last 7 Days</DropdownMenuRadioItem>
                 </DropdownMenuRadioGroup>
               </DropdownMenuGroup>
             </DropdownMenuContent>
@@ -282,8 +282,8 @@ export default function FavoritesPage() {
                 onClick={() => setActiveTab(item.id)}
                 className={`w-full text-left p-4 rounded-2xl border transition-all duration-300 flex items-center justify-between group cursor-pointer ${
                   isActive 
-                    ? "bg-indigo-600/15 border-indigo-500/35 text-white shadow-lg shadow-indigo-650/5" 
-                    : "bg-[var(--surface-1)] border-slate-850 text-slate-400 hover:text-white hover:border-slate-700 hover:bg-[var(--surface-2)]"
+                    ? "bg-indigo-600/15 border-indigo-500/35 text-indigo-700 dark:text-white shadow-lg shadow-indigo-650/5" 
+                    : "bg-white dark:bg-[var(--surface-1)] border-slate-200 dark:border-slate-850 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:border-slate-300 dark:hover:border-slate-700 hover:bg-slate-50 dark:hover:bg-[var(--surface-2)]"
                 }`}
               >
                 <div className="flex items-center gap-3">
@@ -298,8 +298,8 @@ export default function FavoritesPage() {
                   variant="secondary" 
                   className={`text-[10px] font-black rounded-lg px-2 py-0.5 border transition-all ${
                     isActive 
-                      ? "bg-indigo-600/30 text-indigo-300 border-indigo-550/20" 
-                      : "bg-slate-900/60 text-slate-500 border-slate-800/80 group-hover:text-slate-300"
+                      ? "bg-indigo-600/30 text-indigo-700 dark:text-indigo-300 border-indigo-550/20" 
+                      : "bg-slate-100 dark:bg-slate-900/60 text-slate-500 border-slate-200 dark:border-slate-800/80 group-hover:text-slate-700 dark:group-hover:text-slate-300"
                   }`}
                 >
                   {item.count}
@@ -349,7 +349,7 @@ export default function FavoritesPage() {
                             </Button>
                           </div>
                           <div className="space-y-1 mb-6 flex-1">
-                            <h4 className="text-lg font-black text-white tracking-tight group-hover:text-indigo-400 transition-colors">{project.title}</h4>
+                            <h4 className="text-lg font-black text-slate-900 dark:text-white tracking-tight group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">{project.title}</h4>
                             <p className="text-xs text-slate-400 line-clamp-2 leading-relaxed">{project.description}</p>
                           </div>
                           <div className="flex items-center gap-2 pt-4 border-t border-slate-900/60">
@@ -401,7 +401,7 @@ export default function FavoritesPage() {
                             </Button>
                           </div>
                           <div className="space-y-1 mb-6">
-                            <h4 className="text-lg font-black text-white tracking-tight group-hover:text-indigo-400 transition-colors">{db.name}</h4>
+                            <h4 className="text-lg font-black text-slate-900 dark:text-white tracking-tight group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">{db.name}</h4>
                             <p className="text-xs text-slate-500 font-medium">{db.type} • {db.database || "Database"}</p>
                           </div>
                           <div className="flex items-center justify-between pt-4 border-t border-slate-900/60">
@@ -439,7 +439,7 @@ export default function FavoritesPage() {
                             <MessageSquare className="h-5 w-5" />
                           </div>
                           <div className="flex-1 min-w-0" onClick={() => handleOpenChat(q.sessionId)}>
-                            <p className="text-sm font-bold text-white group-hover:text-indigo-400 transition-colors truncate">{q.question}</p>
+                            <p className="text-sm font-bold text-slate-900 dark:text-white group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors truncate">{q.question}</p>
                             <div className="flex items-center gap-3 mt-1">
                               <span className="text-[10px] text-slate-650 font-bold uppercase tracking-wider">Added on {q.timestamp}</span>
                             </div>
@@ -493,7 +493,7 @@ export default function FavoritesPage() {
                             <Clock className="h-7 w-7" />
                           </div>
                           <div className="flex-1 min-w-0" onClick={() => handleOpenChat(folder.id)}>
-                            <h4 className="text-base font-black text-white tracking-tight group-hover:text-indigo-400 transition-colors truncate">{folder.title}</h4>
+                            <h4 className="text-base font-black text-slate-900 dark:text-white tracking-tight group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors truncate">{folder.title}</h4>
                             <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mt-1">{folder.messages?.length || 0} messages</p>
                           </div>
                           <div className="flex items-center gap-1 shrink-0">
@@ -529,7 +529,7 @@ export default function FavoritesPage() {
                 <div className="h-16 w-16 rounded-2xl bg-indigo-500/10 flex items-center justify-center text-indigo-400 mb-6 border border-indigo-500/25">
                   <Star className="h-8 w-8 animate-pulse text-indigo-400" />
                 </div>
-                <h3 className="text-xl font-bold text-white mb-3">No Favorites Found</h3>
+                <h3 className="text-xl font-bold text-slate-900 dark:text-white mb-3">No Favorites Found</h3>
                 <p className="text-sm text-slate-400 mb-6 leading-relaxed max-w-sm">
                   {searchQuery 
                     ? "No favorited items match your current search query." 
