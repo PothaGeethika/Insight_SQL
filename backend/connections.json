@@ -48,5 +48,22 @@
         "cloud_id": "",
         "id": "b35b94c6-e7af-4374-920b-5b146ee0c862",
         "is_default": true
+    },
+    {
+        "name": "neo4j",
+        "type": "neo4j",
+        "host": "a1c190a6.databases.neo4j.io",
+        "port": 7687,
+        "database": "neo4j",
+        "username": "a1c190a6",
+        "password": "msuy3Fbe8RmOCM2dWDVjDYO3wuT6HPyAZJrn_LD7x6M",
+        "account": null,
+        "warehouse": null,
+        "schema_name": null,
+        "role": null,
+        "api_key": null,
+        "cloud_id": null,
+        "id": "ac733574-78f7-4ec9-99da-7208fd227693",
+        "is_default": true
     }
 ]

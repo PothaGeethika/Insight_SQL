@@ -1,8 +1,8 @@
 import os
 import json
+from pymongo import MongoClient
+from bson import json_util
 try:
-    from pymongo import MongoClient
-    from bson import json_util
     PYMONGO_AVAILABLE = True
 except ImportError:
     PYMONGO_AVAILABLE = False

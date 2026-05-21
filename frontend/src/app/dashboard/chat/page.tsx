@@ -139,6 +139,7 @@ export default function ChatPage() {
   const [showSQL, setShowSQL] = useState(true);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
@@ -1132,7 +1133,9 @@ export default function ChatPage() {
   });
 
   const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (messagesContainerRef.current) {
+      messagesContainerRef.current.scrollTop = messagesContainerRef.current.scrollHeight;
+    }
   };
 
   useEffect(() => {
@@ -1813,8 +1816,8 @@ export default function ChatPage() {
           </div>
         </div>
 
-        <ScrollArea className="flex-1 min-h-0 border-t border-b bg-muted/5">
-          <div className="max-w-3xl mx-auto p-6 space-y-6 pb-52">
+        <div ref={messagesContainerRef} className="flex-1 min-h-0 border-t border-b bg-muted/5 overflow-y-auto">
+          <div className="max-w-3xl mx-auto p-6 space-y-6 pb-72">
             <AnimatePresence>
               {messages.map((msg) => (
                 <motion.div
@@ -2118,7 +2121,7 @@ export default function ChatPage() {
             )}
             <div ref={messagesEndRef} />
           </div>
-        </ScrollArea>
+        </div>
 
         {/* Input Area */}
         <div className="absolute bottom-0 left-0 right-0 p-8 bg-gradient-to-t from-[var(--surface-0)] via-[var(--surface-0)] to-transparent z-10">
@@ -2224,7 +2227,8 @@ export default function ChatPage() {
                       setInput(s);
                       textareaRef.current?.focus();
                     }}
-                    className="px-4 py-1.5 rounded-full bg-[var(--surface-1)] border border-slate-800 text-[11px] font-bold text-slate-400 hover:border-indigo-500 hover:text-white hover:bg-indigo-600/10 transition-all duration-300"
+                    title={s}
+                    className="px-4 py-1.5 rounded-full bg-[var(--surface-1)] border border-slate-800 text-[11px] font-bold text-slate-400 hover:border-indigo-500 hover:text-white hover:bg-indigo-600/10 transition-all duration-300 max-w-[260px] truncate"
                   >
                     {s}
                   </button>

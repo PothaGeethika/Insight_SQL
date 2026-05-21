@@ -3,6 +3,7 @@ import os
 import uuid
 from typing import List, Optional
 from models import DatabaseConnection
+import urllib.parse
 
 class ConnectionManager:
     def __init__(self, storage_path="connections.json"):
@@ -66,7 +67,6 @@ class ConnectionManager:
         self._save(connections)
 
     def format_connection_url(self, conn: DatabaseConnection) -> str:
-        import urllib.parse
         user = urllib.parse.quote_plus(conn.username) if conn.username else ""
         password = urllib.parse.quote_plus(conn.password) if conn.password else ""
         
@@ -109,6 +109,13 @@ class ConnectionManager:
             if params:
                 url += "?" + "&".join(params)
             return url
+        elif conn.type == "neo4j":
+            scheme = "neo4j+s" if conn.host and "databases.neo4j.io" in conn.host else "neo4j"
+            host_part = conn.host or "localhost"
+            port_part = f":{conn.port}" if conn.port else ""
+            if user and password:
+                return f"{scheme}://{user}:{password}@{host_part}{port_part}"
+            return f"{scheme}://{host_part}{port_part}"
         else:
             raise ValueError(f"Unsupported database type: {conn.type}")
 

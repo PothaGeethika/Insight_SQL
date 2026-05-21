@@ -18,3 +18,4 @@ snowflake-sqlalchemy
 pymysql
 cryptography
 elasticsearch
+neo4j

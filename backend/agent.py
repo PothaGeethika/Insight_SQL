@@ -9,6 +9,7 @@ from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from dotenv import load_dotenv
+import json
 
 load_dotenv()
 
@@ -115,6 +116,22 @@ class SQLAgent:
         
         Elasticsearch DSL JSON:
         """)
+
+        self.neo4j_prompt = ChatPromptTemplate.from_template("""
+        You are an expert Neo4j developer. Given the database schema (nodes and relationships) below, convert the user's natural language question into a valid Cypher query.
+        
+        Schema:
+        {schema}
+        
+        Question: {question}
+        
+        Rules:
+        1. Only return the Cypher query. Do not include any explanations or markdown blocks like ```cypher.
+        2. Ensure the query is optimized.
+        3. Do not limit the results unless explicitly asked.
+        
+        Cypher Query:
+        """)
         self.parser = StrOutputParser()
         
         self.synthesize_prompt = ChatPromptTemplate.from_template("""
@@ -190,6 +207,8 @@ class SQLAgent:
             chain = self.mysql_prompt | llm | self.parser
         elif db_type == "elasticsearch":
             chain = self.elasticsearch_prompt | llm | self.parser
+        elif db_type == "neo4j":
+            chain = self.neo4j_prompt | llm | self.parser
         else:
             chain = self.sql_prompt | llm | self.parser
         
@@ -261,7 +280,6 @@ class SQLAgent:
 
     def synthesize_answer(self, question, headers, rows, provider="gemini", model_name=None):
         """Synthesizes a natural language answer based on query results."""
-        import json
         try:
             llm = self.get_llm(provider, model_name)
             chain = self.synthesize_prompt | llm | self.parser

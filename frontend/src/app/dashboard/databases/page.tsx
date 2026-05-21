@@ -71,8 +71,8 @@ const DB_TYPES = [
     ),
   },
   {
-    id: "graph",
-    name: "Graph DB",
+    id: "neo4j",
+    name: "Neo4j",
     description: "Model and query data relationships.",
     icon: (
       <div className="h-10 w-10 rounded-xl bg-indigo-500/10 flex items-center justify-center">
@@ -162,7 +162,7 @@ export default function DatabasesPage() {
       case 'mongodb': return 27017;
       case 'elasticsearch': return 9200;
       case 'vector': return 6333;
-      case 'graph': return 7687;
+      case 'neo4j': return 7687;
       default: return 5432;
     }
   };

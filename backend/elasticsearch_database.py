@@ -1,5 +1,7 @@
 import os
 import json
+import urllib.parse
+
 try:
     from elasticsearch import Elasticsearch
     ES_AVAILABLE = True

@@ -7,6 +7,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 from models import QueryRequest, ConnectionRequest, DatabaseConnection
 from typing import List, Optional
+from agent import SQLAgent
+from connection_manager import ConnectionManager
 
 class SuggestionRequest(BaseModel):
     history: List[dict] = []
@@ -41,9 +43,6 @@ connection_manager = None
 def init_components():
     global db_manager, sql_agent, connection_manager
     
-    from agent import SQLAgent
-    from connection_manager import ConnectionManager
-    
     # Initialize Connection Manager (Always needed)
     try:
         connection_manager = ConnectionManager()
@@ -70,6 +69,9 @@ def init_components():
             elif default_conn.type == "elasticsearch":
                 from elasticsearch_database import ElasticsearchDatabaseManager
                 db_manager = ElasticsearchDatabaseManager(db_url)
+            elif default_conn.type == "neo4j":
+                from neo4j_database import Neo4jDatabaseManager
+                db_manager = Neo4jDatabaseManager(db_url)
             else:
                 from database import DatabaseManager
                 db_manager = DatabaseManager(db_url)
@@ -86,6 +88,9 @@ def init_components():
                 elif "elasticsearch" in db_url:
                     from elasticsearch_database import ElasticsearchDatabaseManager
                     db_manager = ElasticsearchDatabaseManager(db_url)
+                elif "neo4j" in db_url:
+                    from neo4j_database import Neo4jDatabaseManager
+                    db_manager = Neo4jDatabaseManager(db_url)
                 else:
                     from database import DatabaseManager
                     db_manager = DatabaseManager(db_url)
@@ -108,7 +113,7 @@ def test_database_connection(request: ConnectionRequest):
         if request.type == "snowflake":
             if not request.account or not request.database:
                 return {"status": "error", "message": "Account Identifier and Database name are required for Snowflake."}
-        elif request.type not in ["sqlite", "mongodb"] and (not request.host or not request.database):
+        elif request.type not in ["sqlite", "mongodb", "neo4j"] and (not request.host or not request.database):
             return {"status": "error", "message": "Host and Database name are required for this database type."}
 
         # Create a temporary connection object
@@ -133,6 +138,14 @@ def test_database_connection(request: ConnectionRequest):
                 return {"status": "success", "message": "Connection successful! Elasticsearch is reachable."}
             else:
                 raise Exception("Elasticsearch ping failed.")
+        elif request.type == "neo4j":
+            from neo4j_database import Neo4jDatabaseManager
+            try:
+                neo_mgr = Neo4jDatabaseManager(db_url)
+                neo_mgr.driver.verify_connectivity()
+                return {"status": "success", "message": "Connection successful! Neo4j is reachable."}
+            except Exception as e:
+                raise Exception(f"Neo4j connection failed: {str(e)}")
         else:
             # SQL connection test
             from sqlalchemy import create_engine, text
@@ -240,6 +253,9 @@ def ask_question(request: QueryRequest):
                 elif db_type == "elasticsearch":
                     from elasticsearch_database import ElasticsearchDatabaseManager
                     temp_manager = ElasticsearchDatabaseManager(db_url)
+                elif db_type == "neo4j":
+                    from neo4j_database import Neo4jDatabaseManager
+                    temp_manager = Neo4jDatabaseManager(db_url)
                 else:
                     from database import DatabaseManager
                     temp_manager = DatabaseManager(db_url)
@@ -269,6 +285,8 @@ def ask_question(request: QueryRequest):
                     mql_details.append(f"-- {conn.name} (MongoDB):\n{generated_query}")
                 elif db_type == "elasticsearch":
                     mql_details.append(f"-- {conn.name} (Elasticsearch DSL):\n{generated_query}")
+                elif db_type == "neo4j":
+                    query_details.append(f"-- {conn.name} (Neo4j Cypher):\n{generated_query}")
                 else:
                     query_details.append(f"-- {conn.name} ({db_type.upper()}):\n{generated_query}")
                     
@@ -372,6 +390,9 @@ def suggest_questions(request: SuggestionRequest):
         elif conn.type == "elasticsearch":
             from elasticsearch_database import ElasticsearchDatabaseManager
             current_db_manager = ElasticsearchDatabaseManager(db_url)
+        elif conn.type == "neo4j":
+            from neo4j_database import Neo4jDatabaseManager
+            current_db_manager = Neo4jDatabaseManager(db_url)
         else:
             from database import DatabaseManager
             current_db_manager = DatabaseManager(db_url)
