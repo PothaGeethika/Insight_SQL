@@ -45,6 +45,8 @@ import {
   ArrowLeft,
   Camera,
   Video,
+  Monitor,
+  MonitorOff,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import {
@@ -80,6 +82,8 @@ interface Message {
   sql?: string;
   generated_query?: string;
   query_type?: string;
+  attachmentUrl?: string;
+  attachmentType?: 'image' | 'video';
   timestamp: string;
   tableData?: {
     headers: string[];
@@ -156,6 +160,12 @@ export default function ChatPage() {
   const [isCameraOpen, setIsCameraOpen] = useState(false);
   const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const [isScreenSharing, setIsScreenSharing] = useState(false);
+  const [screenStream, setScreenStream] = useState<MediaStream | null>(null);
+  const screenVideoRef = useRef<HTMLVideoElement>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordedChunksRef = useRef<BlobPart[]>([]);
+  const [zoomedImage, setZoomedImage] = useState<string | null>(null);
 
   useEffect(() => {
     if (!attachedFile) {
@@ -165,7 +175,6 @@ export default function ChatPage() {
     if (attachedFile.type.startsWith("image/")) {
       const url = URL.createObjectURL(attachedFile);
       setFilePreviewUrl(url);
-      return () => URL.revokeObjectURL(url);
     }
   }, [attachedFile]);
   const [projects, setProjects] = useState<any[]>([]);
@@ -659,6 +668,74 @@ export default function ChatPage() {
       }
       stopCamera();
     }
+  };
+
+  const startScreenShare = async () => {
+    try {
+      const stream = await (navigator.mediaDevices as any).getDisplayMedia({
+        video: { cursor: "always", displaySurface: "monitor" },
+        audio: false,
+      });
+      setScreenStream(stream);
+      setIsScreenSharing(true);
+      setTimeout(() => {
+        if (screenVideoRef.current) {
+          screenVideoRef.current.srcObject = stream;
+        }
+      }, 100);
+
+      // Initialize MediaRecorder for screen recording
+      recordedChunksRef.current = [];
+      const mediaRecorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) {
+          recordedChunksRef.current.push(e.data);
+        }
+      };
+      mediaRecorderRef.current = mediaRecorder;
+      mediaRecorder.start(1000); // collect data chunks every second
+
+      // Auto-stop when user clicks the browser's "Stop sharing" button
+      stream.getVideoTracks()[0].addEventListener("ended", () => {
+        stopScreenShare();
+      });
+    } catch (err) {
+      console.error("Screen share failed:", err);
+      setIsScreenSharing(false);
+    }
+  };
+
+  const stopScreenShare = () => {
+    if (screenStream) {
+      screenStream.getTracks().forEach((t) => t.stop());
+      setScreenStream(null);
+    }
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
+      mediaRecorderRef.current.stop();
+    }
+    setIsScreenSharing(false);
+  };
+
+  const stopAndGetRecording = (): Promise<File | null> => {
+    return new Promise((resolve) => {
+      if (!mediaRecorderRef.current || mediaRecorderRef.current.state === "inactive") {
+        resolve(null);
+        return;
+      }
+      mediaRecorderRef.current.onstop = () => {
+        const blob = new Blob(recordedChunksRef.current, { type: 'video/webm' });
+        const file = new File([blob], `screen_recording_${Date.now()}.webm`, { type: 'video/webm' });
+        recordedChunksRef.current = [];
+        resolve(file);
+      };
+      mediaRecorderRef.current.stop();
+      // Also stop the tracks
+      if (screenStream) {
+        screenStream.getTracks().forEach((t) => t.stop());
+        setScreenStream(null);
+      }
+      setIsScreenSharing(false);
+    });
   };
 
   const onFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1228,15 +1305,30 @@ export default function ChatPage() {
   };
 
   const handleSend = async () => {
-    if (!input.trim() && !attachedFile) return;
+    if (!input.trim() && !attachedFile && !isScreenSharing) return;
 
-    const fileSuffix = attachedFile ? `\n\n📎 Attached File: ${attachedFile.name}` : "";
+    // If screen sharing, stop and get recording
+    let fileToSend = attachedFile;
+    let attachmentPreview = filePreviewUrl;
+    let type: 'image' | 'video' = attachedFile?.type.startsWith('image/') ? 'image' : 'image';
+    if (isScreenSharing && !attachedFile) {
+      const recordingFile = await stopAndGetRecording();
+      if (recordingFile) {
+        fileToSend = recordingFile;
+        attachmentPreview = URL.createObjectURL(recordingFile);
+        type = 'video';
+      }
+    }
+
+    const fileSuffix = fileToSend && !attachmentPreview ? `\n\n📎 ${isScreenSharing ? "🖥️ Screen recording" : `Attached File: ${fileToSend.name}`}` : "";
     const finalContent = input + fileSuffix;
 
     const userMsg: Message = {
       id: Date.now().toString(),
       role: "user",
       content: finalContent,
+      attachmentUrl: attachmentPreview || undefined,
+      attachmentType: attachmentPreview ? type : undefined,
       timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
     };
 
@@ -1859,7 +1951,25 @@ export default function ChatPage() {
                           </div>
                         </div>
                       ) : (
-                        <p className={`text-sm leading-relaxed ${msg.role === "user" ? "!text-white font-medium" : "text-slate-800 dark:text-slate-200"}`}>{msg.content}</p>
+                        <div className="flex flex-col gap-3">
+                          {msg.attachmentUrl && (
+                            msg.attachmentType === 'video' ? (
+                              <video 
+                                src={msg.attachmentUrl} 
+                                controls
+                                className="rounded-xl max-w-full max-h-60 shadow-md border border-white/20" 
+                              />
+                            ) : (
+                              <img 
+                                src={msg.attachmentUrl} 
+                                alt="Attachment" 
+                                className="rounded-xl max-w-full max-h-60 object-contain shadow-md border border-white/20 cursor-pointer hover:opacity-90 transition-opacity" 
+                                onClick={() => setZoomedImage(msg.attachmentUrl!)}
+                              />
+                            )
+                          )}
+                          <p className={`text-sm leading-relaxed ${msg.role === "user" ? "!text-white font-medium" : "text-slate-800 dark:text-slate-200"}`}>{msg.content}</p>
+                        </div>
                       )}
                     </div>
 
@@ -2127,8 +2237,30 @@ export default function ChatPage() {
         <div className="absolute bottom-0 left-0 right-0 p-8 bg-gradient-to-t from-[var(--surface-0)] via-[var(--surface-0)] to-transparent z-10">
           <div className="max-w-3xl mx-auto space-y-6">
             <div className="relative group">
+              {/* Floating Screen Share Preview */}
+              {isScreenSharing && (
+                <div className="absolute -top-36 right-4 flex flex-col items-end gap-2 animate-in fade-in slide-in-from-bottom-2 duration-300 z-50">
+                  <div className="flex items-center gap-3 px-3 py-1.5 bg-[var(--surface-1)] border border-slate-800 rounded-full text-xs text-slate-300 font-medium shadow-xl">
+                    <span className="h-1.5 w-1.5 bg-indigo-500 rounded-full animate-pulse" />
+                    Stream is live
+                    <button onClick={stopScreenShare} className="hover:text-red-400 transition-colors ml-1">
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                  <div className="w-56 aspect-video rounded-xl overflow-hidden border border-slate-700/50 bg-black shadow-2xl relative">
+                    <video
+                      ref={screenVideoRef}
+                      autoPlay
+                      muted
+                      playsInline
+                      className="w-full h-full object-cover rounded-xl"
+                    />
+                  </div>
+                </div>
+              )}
               <div className="absolute -inset-0.5 bg-gradient-to-r from-indigo-500 to-purple-600 rounded-[28px] opacity-10 group-focus-within:opacity-30 blur-sm transition-opacity duration-500" />
               <div className="relative flex flex-col bg-[var(--surface-1)] border border-slate-800 rounded-[24px] shadow-2xl transition-all duration-300 group-focus-within:border-indigo-500/50 p-2">
+
                 {attachedFile && (
                   <div className="flex items-center gap-2 bg-indigo-950/40 border border-indigo-500/30 text-indigo-200 text-xs px-3 py-1.5 rounded-full w-fit m-2 animate-in fade-in slide-in-from-bottom-1 duration-300">
                     {filePreviewUrl ? (
@@ -2183,6 +2315,17 @@ export default function ChatPage() {
                     >
                       {isListening ? <MicOff className="h-5 w-5" /> : <Mic className="h-5 w-5" />}
                     </Button>
+                    <Button
+                      onClick={isScreenSharing ? stopScreenShare : startScreenShare}
+                      variant="ghost"
+                      size="icon"
+                      className={`h-10 w-10 rounded-xl transition-all ${isScreenSharing
+                          ? "text-indigo-400 bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/30 shadow-inner"
+                          : "text-slate-500 hover:text-white"
+                        }`}
+                    >
+                      {isScreenSharing ? <MonitorOff className="h-5 w-5" /> : <Monitor className="h-5 w-5" />}
+                    </Button>
                     <DropdownMenu>
                       <DropdownMenuTrigger render={
                         <Button
@@ -2206,7 +2349,7 @@ export default function ChatPage() {
                     </DropdownMenu>
                     <Button
                       onClick={handleSend}
-                      disabled={(!input.trim() && !attachedFile) || isTyping}
+                      disabled={(!input.trim() && !attachedFile && !isScreenSharing) || isTyping}
                       size="icon"
                       className="h-10 w-10 rounded-2xl bg-gradient-to-br from-indigo-600 to-purple-700 hover:from-indigo-700 hover:to-purple-800 text-white shadow-xl shadow-indigo-600/20 transition-all active:scale-95"
                     >
@@ -2843,6 +2986,34 @@ export default function ChatPage() {
                   Take Photo
                 </Button>
               </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Zoomed Image Modal */}
+      <AnimatePresence>
+        {zoomedImage && (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4" onClick={() => setZoomedImage(null)}>
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              transition={{ duration: 0.2 }}
+              className="relative max-w-[90vw] max-h-[90vh]"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <button
+                onClick={() => setZoomedImage(null)}
+                className="absolute -top-12 right-0 p-2 text-white/70 hover:text-white hover:bg-white/10 rounded-full transition-colors cursor-pointer"
+              >
+                <X className="h-6 w-6" />
+              </button>
+              <img 
+                src={zoomedImage} 
+                alt="Zoomed full screen" 
+                className="rounded-xl object-contain max-h-[85vh] shadow-2xl border border-white/10"
+              />
             </motion.div>
           </div>
         )}
