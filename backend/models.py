@@ -4,7 +4,7 @@ from typing import Optional, List
 class DatabaseConnection(BaseModel):
     id: Optional[str] = None
     name: str
-    type: str  # postgresql, mysql, sqlite, etc.
+    type: str  # postgresql, mysql, sqlite, mongodb, snowflake, etc.
     host: Optional[str] = None
     port: Optional[int] = None
     database: str
@@ -12,6 +12,14 @@ class DatabaseConnection(BaseModel):
     password: Optional[str] = None
     status: str = "disconnected"
     is_default: bool = False
+    # Snowflake-specific fields
+    account: Optional[str] = None
+    warehouse: Optional[str] = None
+    schema_name: Optional[str] = None
+    role: Optional[str] = None
+    # Elasticsearch-specific fields
+    api_key: Optional[str] = None
+    cloud_id: Optional[str] = None
 
 class ConnectionRequest(BaseModel):
     name: str
@@ -21,6 +29,14 @@ class ConnectionRequest(BaseModel):
     database: str
     username: Optional[str] = None
     password: Optional[str] = None
+    # Snowflake-specific fields
+    account: Optional[str] = None
+    warehouse: Optional[str] = None
+    schema_name: Optional[str] = None
+    role: Optional[str] = None
+    # Elasticsearch-specific fields
+    api_key: Optional[str] = None
+    cloud_id: Optional[str] = None
 
 class QueryRequest(BaseModel):
     question: str

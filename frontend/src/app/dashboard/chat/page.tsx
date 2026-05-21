@@ -78,6 +78,8 @@ interface Message {
   role: "user" | "assistant";
   content: string;
   sql?: string;
+  generated_query?: string;
+  query_type?: string;
   timestamp: string;
   tableData?: {
     headers: string[];
@@ -86,11 +88,15 @@ interface Message {
   versions?: {
     content: string;
     sql?: string;
+    generated_query?: string;
+    query_type?: string;
     tableData?: any;
     timestamp: string;
     response?: {
       content: string;
       sql?: string;
+      generated_query?: string;
+      query_type?: string;
       tableData?: any;
       timestamp: string;
     };
@@ -186,6 +192,10 @@ export default function ChatPage() {
   const [databaseName, setDatabaseName] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [account, setAccount] = useState("");
+  const [warehouse, setWarehouse] = useState("");
+  const [schemaName, setSchemaName] = useState("");
+  const [role, setRole] = useState("");
   const [isTesting, setIsTesting] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [testResult, setTestResult] = useState<{ status: 'success' | 'error', message: string } | null>(null);
@@ -194,6 +204,8 @@ export default function ChatPage() {
     { id: "postgresql", name: "PostgreSQL" },
     { id: "mysql", name: "MySQL" },
     { id: "mongodb", name: "MongoDB" },
+    { id: "elasticsearch", name: "Elasticsearch" },
+    { id: "snowflake", name: "Snowflake" },
   ];
 
   const getDefaultPort = (type: string) => {
@@ -201,6 +213,7 @@ export default function ChatPage() {
       case 'postgresql': return 5432;
       case 'mysql': return 3306;
       case 'mongodb': return 27017;
+      case 'elasticsearch': return 9200;
       default: return 5432;
     }
   };
@@ -227,6 +240,29 @@ export default function ChatPage() {
           username = decodeURIComponent(credentialsPart);
         }
       }
+      if (type === 'snowflake') {
+        let account = "";
+        let database = "";
+        let schemaName = "";
+        let warehouse = "";
+        let role = "";
+        
+        const qIndex = hostPortDb.indexOf('?');
+        let pathPart = qIndex !== -1 ? hostPortDb.substring(0, qIndex) : hostPortDb;
+        const queryPart = qIndex !== -1 ? hostPortDb.substring(qIndex + 1) : "";
+        
+        const pathParts = pathPart.split('/');
+        account = pathParts[0] || "";
+        database = pathParts[1] || "";
+        schemaName = pathParts[2] || "";
+        
+        if (queryPart) {
+          const params = new URLSearchParams(queryPart);
+          warehouse = params.get('warehouse') || "";
+          role = params.get('role') || "";
+        }
+        return { type, username, password, account, database, schemaName, warehouse, role };
+      }
       let hostPort = hostPortDb;
       let database = "";
       const firstSlashIndex = hostPortDb.indexOf('/');
@@ -235,7 +271,7 @@ export default function ChatPage() {
         database = hostPortDb.substring(firstSlashIndex + 1);
       }
       let host = hostPort;
-      let port = type === 'postgresql' ? 5432 : (type === 'mongodb' ? 27017 : 3306);
+      let port = type === 'postgresql' ? 5432 : (type === 'mongodb' ? 27017 : (type === 'elasticsearch' ? 9200 : 3306));
       const lastColonIndex = hostPort.lastIndexOf(':');
       if (lastColonIndex !== -1) {
         const portStr = hostPort.substring(lastColonIndex + 1);
@@ -259,23 +295,37 @@ export default function ChatPage() {
       payload = {
         name: displayName || `${parsed.type}_${parsed.database}`,
         type: parsed.type,
-        host: parsed.host,
-        port: parsed.port,
         database: parsed.database,
         username: parsed.username,
         password: parsed.password
       };
+      if (parsed.type === 'snowflake') {
+        payload.account = (parsed as any).account;
+        payload.warehouse = (parsed as any).warehouse;
+        payload.schema_name = (parsed as any).schemaName;
+        payload.role = (parsed as any).role;
+      } else {
+        payload.host = parsed.host;
+        payload.port = parsed.port;
+      }
     } else {
       if (!databaseName) return null;
       payload = {
         name: displayName || `${dbType}_${databaseName}`,
         type: dbType,
-        host: host || "localhost",
-        port: port ? parseInt(port) : getDefaultPort(dbType),
         database: databaseName,
         username: username,
         password: password
       };
+      if (dbType === 'snowflake') {
+        payload.account = account;
+        payload.warehouse = warehouse;
+        payload.schema_name = schemaName;
+        payload.role = role;
+      } else {
+        payload.host = host || "localhost";
+        payload.port = port ? parseInt(port) : getDefaultPort(dbType);
+      }
     }
     return payload;
   };
@@ -361,7 +411,11 @@ export default function ChatPage() {
   const startConfigDb = (dbInfo: any) => {
     const existing = databases.find(db => db.id === dbInfo.id);
     setActiveConfigDb(dbInfo);
-    setDbType(dbInfo.type?.toLowerCase().includes("mongo") ? "mongodb" : (dbInfo.type?.toLowerCase().includes("mysql") ? "mysql" : "postgresql"));
+    setDbType(
+      dbInfo.type?.toLowerCase().includes("mongo") ? "mongodb" : 
+      (dbInfo.type?.toLowerCase().includes("mysql") ? "mysql" : 
+      (dbInfo.type?.toLowerCase().includes("snowflake") ? "snowflake" : "postgresql"))
+    );
     setDisplayName(dbInfo.name || "");
     setTestResult(null);
 
@@ -371,25 +425,43 @@ export default function ChatPage() {
       setDatabaseName(existing.database || "");
       setUsername(existing.username || "");
       setPassword(existing.password || "");
+      setAccount(existing.account || "");
+      setWarehouse(existing.warehouse || "");
+      setSchemaName(existing.schema_name || "");
+      setRole(existing.role || "");
 
       let connStr = "";
       if (existing.type === "sqlite") {
         connStr = `sqlite:///${existing.database}`;
+      } else if (existing.type === "snowflake") {
+        const user = existing.username ? encodeURIComponent(existing.username) : "";
+        const pass = existing.password ? encodeURIComponent(existing.password) : "";
+        const auth = (user || pass) ? `${user}:${pass}@` : "";
+        const schema = existing.schema_name ? `/${existing.schema_name}` : "";
+        connStr = `snowflake://${auth}${existing.account || ""}/${existing.database || ""}${schema}`;
+        const params: string[] = [];
+        if (existing.warehouse) params.push(`warehouse=${existing.warehouse}`);
+        if (existing.role) params.push(`role=${existing.role}`);
+        if (params.length > 0) connStr += `?${params.join('&')}`;
       } else {
-        const user = existing.username ? decodeURIComponent(existing.username) : "";
-        const pass = existing.password ? decodeURIComponent(existing.password) : "";
+        const user = existing.username ? encodeURIComponent(existing.username) : "";
+        const pass = existing.password ? encodeURIComponent(existing.password) : "";
         const auth = (user || pass) ? `${user}:${pass}@` : "";
         const portStr = existing.port ? `:${existing.port}` : "";
         connStr = `${existing.type}://${auth}${existing.host || ""}${portStr}/${existing.database || ""}`;
       }
       setConnectionString(connStr);
-      setConnectionMethod(existing.host || existing.username ? "params" : "string");
+      setConnectionMethod(existing.host || existing.username || existing.account ? "params" : "string");
     } else {
       setHost("localhost");
       setPort("");
       setDatabaseName("");
       setUsername("");
       setPassword("");
+      setAccount("");
+      setWarehouse("");
+      setSchemaName("");
+      setRole("");
       setConnectionString("");
       setConnectionMethod("string");
     }
@@ -764,6 +836,8 @@ export default function ChatPage() {
         role: "assistant",
         content: data.content,
         sql: data.sql,
+        generated_query: data.generated_query,
+        query_type: data.query_type,
         tableData: data.tableData,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       };
@@ -772,6 +846,8 @@ export default function ChatPage() {
       (updatedUserMsg.versions![currentIdx] as any).response = {
         content: assistantMsg.content,
         sql: assistantMsg.sql,
+        generated_query: assistantMsg.generated_query,
+        query_type: assistantMsg.query_type,
         tableData: assistantMsg.tableData,
         timestamp: assistantMsg.timestamp
       };
@@ -1336,7 +1412,22 @@ export default function ChatPage() {
   };
 
   // Dynamic Results Logic for Right Panel
-  const resultsData = activeResult?.results;
+  const resultsData = (() => {
+    if (activeResult?.results) {
+      return activeResult.results;
+    }
+    if (activeResult?.tableData && Array.isArray(activeResult.tableData.headers) && Array.isArray(activeResult.tableData.rows)) {
+      const headers = activeResult.tableData.headers;
+      return activeResult.tableData.rows.map((row: any[]) => {
+        const obj: any = {};
+        headers.forEach((header: string, idx: number) => {
+          obj[header] = row[idx];
+        });
+        return obj;
+      });
+    }
+    return null;
+  })();
   const isResultsArray = Array.isArray(resultsData);
   const hasResults = isResultsArray && resultsData.length > 0;
   const firstRow = hasResults ? resultsData[0] : null;
@@ -1551,11 +1642,13 @@ export default function ChatPage() {
                 AI Provider:
               </Label>
               <Select value={provider} onValueChange={(val) => {
-                setProvider(val);
-                if (val === "gemini") setModel("gemini-2.0-flash");
-                else if (val === "openai") setModel("gpt-4o");
-                else if (val === "anthropic") setModel("claude-3-5-sonnet");
-                else if (val === "deepseek") setModel("deepseek-v4-pro");
+                if (val) {
+                  setProvider(val);
+                  if (val === "gemini") setModel("gemini-2.0-flash");
+                  else if (val === "openai") setModel("gpt-4o");
+                  else if (val === "anthropic") setModel("claude-3-5-sonnet");
+                  else if (val === "deepseek") setModel("deepseek-v4-pro");
+                }
               }}>
                 <SelectTrigger className="h-8 w-32 text-xs text-slate-900 dark:text-slate-200">
                   <SelectValue placeholder="Provider" />
@@ -1569,7 +1662,7 @@ export default function ChatPage() {
               </Select>
             </div>
             <div className="flex items-center gap-2 text-sm">
-              <Select value={model} onValueChange={setModel}>
+              <Select value={model} onValueChange={(val) => val && setModel(val)}>
                 <SelectTrigger className="h-8 w-40 text-xs text-slate-900 dark:text-slate-200">
                   <SelectValue placeholder="Model" />
                 </SelectTrigger>
@@ -1605,7 +1698,7 @@ export default function ChatPage() {
               <Label htmlFor="project-select" className="text-xs font-bold text-slate-900 dark:text-slate-200 hidden lg:inline">
                 Project:
               </Label>
-              <Select value={selectedProject} onValueChange={setSelectedProject}>
+              <Select value={selectedProject} onValueChange={(val) => setSelectedProject(val || "")}>
                 <SelectTrigger className="h-8 w-44 text-xs text-slate-900 dark:text-slate-200">
                   <SelectValue placeholder="Select Project">
                     {projects.find(p => p.id === selectedProject)?.title || "Select Project"}
@@ -1738,7 +1831,7 @@ export default function ChatPage() {
                     </div>
                   )}
 
-                  <div className={`max-w-[80%] space-y-3 ${msg.role === "user" ? "items-end" : "items-start"}`}>
+                  <div className={`max-w-[80%] space-y-3 ${msg.role === "user" ? "items-end" : "items-start"} min-w-0`}>
                     <div
                       className={`relative rounded-2xl px-4 py-3 ${msg.role === "user"
                         ? "bg-gradient-to-br from-indigo-500 to-indigo-600 dark:from-indigo-600 dark:to-indigo-700 text-white rounded-tr-md ml-auto shadow-md shadow-indigo-500/30 border border-indigo-400/20"
@@ -1825,11 +1918,11 @@ export default function ChatPage() {
                       </div>
                     </div>
 
-                    {msg.sql && showSQL && (
+                    {(msg.generated_query || msg.sql) && showSQL && (
                       <motion.div
                         initial={{ opacity: 0, height: 0 }}
                         animate={{ opacity: 1, height: "auto" }}
-                        className="rounded-xl overflow-hidden border bg-card"
+                        className="rounded-xl overflow-hidden border bg-card w-full max-w-full min-w-0"
                       >
                         <Tabs defaultValue="results" className="w-full bg-white dark:bg-slate-900 rounded-2xl border shadow-sm overflow-hidden"
                           onValueChange={(val) => {
@@ -1844,7 +1937,7 @@ export default function ChatPage() {
                               Results
                             </TabsTrigger>
                             <TabsTrigger value="sql" className="text-xs h-8 px-4 rounded-lg data-[state=active]:bg-background data-[state=active]:shadow-sm">
-                              SQL
+                              Generated Query
                             </TabsTrigger>
                             <div className="flex-1" />
                             <Button
@@ -1865,14 +1958,15 @@ export default function ChatPage() {
                               size="sm"
                               className="h-7 text-[10px] gap-1.5 px-2 hover:bg-background"
                               onClick={() => {
-                                if (msg.sql) navigator.clipboard.writeText(msg.sql);
+                                const q = msg.generated_query || msg.sql;
+                                if (q) navigator.clipboard.writeText(q);
                               }}
                             >
                               <Copy className="h-3 w-3" />
                               Copy
                             </Button>
                           </TabsList>
-
+ 
                           <TabsContent value="results" className="p-0">
                             {msg.tableData ? (
                               <div className="overflow-x-auto">
@@ -1922,10 +2016,10 @@ export default function ChatPage() {
                               <p className="text-sm text-muted-foreground p-4">Query results will appear here.</p>
                             )}
                           </TabsContent>
-
+ 
                           <TabsContent value="sql" className="p-4 pt-3">
                             <pre className="text-xs font-mono bg-[#0f172a] dark:bg-black/50 text-emerald-400 rounded-lg p-4 overflow-x-auto leading-relaxed">
-                              <code>{msg.sql}</code>
+                              <code>{msg.generated_query || msg.sql}</code>
                             </pre>
                           </TabsContent>
                         </Tabs>
@@ -2159,7 +2253,7 @@ export default function ChatPage() {
               className={`absolute left-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-indigo-500/60 z-50 transition-all ${isResizingSummary ? "bg-indigo-650 w-[3px] border-l-2 border-indigo-400" : "bg-transparent hover:w-1.5"
                 }`}
             />
-            <div className="flex-1 overflow-auto p-8 space-y-10">
+            <div className="flex-1 overflow-y-auto overflow-x-hidden p-8 space-y-10 min-w-0 flex flex-col">
               {/* Header */}
               <div className="flex items-center justify-between">
                 <h2 className="text-xl font-black tracking-tight text-slate-900 dark:text-white uppercase tracking-widest">Summary</h2>
@@ -2228,7 +2322,7 @@ export default function ChatPage() {
                   </ul>
                 </Card>
               ) : (
-                <Card className="bg-[var(--surface-1)] border-slate-900/50 shadow-2xl rounded-[28px] overflow-hidden border-none flex flex-col h-full max-h-[80vh]">
+                <Card className="bg-[var(--surface-1)] border-slate-900/50 shadow-2xl rounded-[28px] overflow-hidden border-none flex flex-col h-full max-h-[80vh] w-full max-w-full min-w-0">
                   <div className="flex items-center justify-between px-8 py-5 border-b border-slate-800/50 flex-shrink-0">
                     <h3 className="text-sm font-black text-slate-900 dark:text-white uppercase tracking-widest">Query Results</h3>
                     <Button variant="ghost" size="sm" className="h-8 text-[11px] font-black gap-2 px-4 text-slate-400 hover:text-white bg-[var(--surface-2)] border border-slate-800 rounded-xl">
@@ -2373,67 +2467,147 @@ export default function ChatPage() {
                     </div>
 
                     {connectionMethod === 'params' ? (
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2">
-                        {/* Host */}
-                        <div className="col-span-2 space-y-1.5">
-                          <label className="text-[10px] font-bold text-slate-450 uppercase tracking-wider">Host</label>
-                          <Input
-                            value={host}
-                            onChange={(e) => setHost(e.target.value)}
-                            placeholder="localhost"
-                            className="bg-slate-900 border-slate-800 focus:border-indigo-500 h-10 rounded-xl text-xs text-white"
-                          />
-                        </div>
-                        {/* Port */}
-                        <div className="space-y-1.5">
-                          <label className="text-[10px] font-bold text-slate-450 uppercase tracking-wider">Port</label>
-                          <Input
-                            value={port}
-                            onChange={(e) => setPort(e.target.value)}
-                            placeholder={String(getDefaultPort(dbType))}
-                            className="bg-slate-900 border-slate-800 focus:border-indigo-500 h-10 rounded-xl text-xs text-white"
-                          />
-                        </div>
+                      dbType === 'snowflake' ? (
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2">
+                          {/* Account */}
+                          <div className="col-span-2 space-y-1.5">
+                            <label className="text-[10px] font-bold text-slate-455 uppercase tracking-wider">Account Identifier</label>
+                            <Input
+                              value={account}
+                              onChange={(e) => setAccount(e.target.value)}
+                              placeholder="e.g., xy12345.us-east-2.aws"
+                              className="bg-slate-900 border-slate-800 focus:border-indigo-500 h-10 rounded-xl text-xs text-white"
+                            />
+                          </div>
+                          {/* Warehouse */}
+                          <div className="space-y-1.5">
+                            <label className="text-[10px] font-bold text-slate-455 uppercase tracking-wider">Warehouse</label>
+                            <Input
+                              value={warehouse}
+                              onChange={(e) => setWarehouse(e.target.value)}
+                              placeholder="e.g., COMPUTE_WH"
+                              className="bg-slate-900 border-slate-800 focus:border-indigo-500 h-10 rounded-xl text-xs text-white"
+                            />
+                          </div>
 
-                        {/* Database Name */}
-                        <div className="space-y-1.5">
-                          <label className="text-[10px] font-bold text-slate-450 uppercase tracking-wider">Database Name</label>
-                          <Input
-                            value={databaseName}
-                            onChange={(e) => setDatabaseName(e.target.value)}
-                            placeholder="e.g., main_db"
-                            className="bg-slate-900 border-slate-800 focus:border-indigo-500 h-10 rounded-xl text-xs text-white"
-                          />
+                          {/* Database Name */}
+                          <div className="space-y-1.5">
+                            <label className="text-[10px] font-bold text-slate-455 uppercase tracking-wider">Database Name</label>
+                            <Input
+                              value={databaseName}
+                              onChange={(e) => setDatabaseName(e.target.value)}
+                              placeholder="e.g., SNOWFLAKE_SAMPLE_DATA"
+                              className="bg-slate-900 border-slate-800 focus:border-indigo-500 h-10 rounded-xl text-xs text-white"
+                            />
+                          </div>
+                          {/* Schema Name */}
+                          <div className="space-y-1.5">
+                            <label className="text-[10px] font-bold text-slate-455 uppercase tracking-wider">Schema Name</label>
+                            <Input
+                              value={schemaName}
+                              onChange={(e) => setSchemaName(e.target.value)}
+                              placeholder="e.g., PUBLIC"
+                              className="bg-slate-900 border-slate-800 focus:border-indigo-500 h-10 rounded-xl text-xs text-white"
+                            />
+                          </div>
+                          {/* Role */}
+                          <div className="space-y-1.5">
+                            <label className="text-[10px] font-bold text-slate-455 uppercase tracking-wider">Role</label>
+                            <Input
+                              value={role}
+                              onChange={(e) => setRole(e.target.value)}
+                              placeholder="e.g., ACCOUNTADMIN"
+                              className="bg-slate-900 border-slate-800 focus:border-indigo-500 h-10 rounded-xl text-xs text-white"
+                            />
+                          </div>
+
+                          {/* Username */}
+                          <div className="space-y-1.5">
+                            <label className="text-[10px] font-bold text-slate-455 uppercase tracking-wider">Username</label>
+                            <Input
+                              value={username}
+                              onChange={(e) => setUsername(e.target.value)}
+                              placeholder="e.g., USERNAME"
+                              className="bg-slate-900 border-slate-800 focus:border-indigo-500 h-10 rounded-xl text-xs text-white"
+                            />
+                          </div>
+                          {/* Password */}
+                          <div className="col-span-2 space-y-1.5">
+                            <label className="text-[10px] font-bold text-slate-455 uppercase tracking-wider">Password</label>
+                            <Input
+                              type="password"
+                              value={password}
+                              onChange={(e) => setPassword(e.target.value)}
+                              placeholder="••••••••"
+                              className="bg-slate-900 border-slate-800 focus:border-indigo-500 h-10 rounded-xl text-xs text-white"
+                            />
+                          </div>
                         </div>
-                        {/* Username */}
-                        <div className="space-y-1.5">
-                          <label className="text-[10px] font-bold text-slate-455 uppercase tracking-wider">Username</label>
-                          <Input
-                            value={username}
-                            onChange={(e) => setUsername(e.target.value)}
-                            placeholder="postgres"
-                            className="bg-slate-900 border-slate-800 focus:border-indigo-500 h-10 rounded-xl text-xs text-white"
-                          />
+                      ) : (
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2">
+                          {/* Host */}
+                          <div className="col-span-2 space-y-1.5">
+                            <label className="text-[10px] font-bold text-slate-450 uppercase tracking-wider">Host</label>
+                            <Input
+                              value={host}
+                              onChange={(e) => setHost(e.target.value)}
+                              placeholder="localhost"
+                              className="bg-slate-900 border-slate-800 focus:border-indigo-500 h-10 rounded-xl text-xs text-white"
+                            />
+                          </div>
+                          {/* Port */}
+                          <div className="space-y-1.5">
+                            <label className="text-[10px] font-bold text-slate-450 uppercase tracking-wider">Port</label>
+                            <Input
+                              value={port}
+                              onChange={(e) => setPort(e.target.value)}
+                              placeholder={String(getDefaultPort(dbType))}
+                              className="bg-slate-900 border-slate-800 focus:border-indigo-500 h-10 rounded-xl text-xs text-white"
+                            />
+                          </div>
+
+                          {/* Database Name */}
+                          <div className="space-y-1.5">
+                            <label className="text-[10px] font-bold text-slate-450 uppercase tracking-wider">Database Name</label>
+                            <Input
+                              value={databaseName}
+                              onChange={(e) => setDatabaseName(e.target.value)}
+                              placeholder="e.g., main_db"
+                              className="bg-slate-900 border-slate-800 focus:border-indigo-500 h-10 rounded-xl text-xs text-white"
+                            />
+                          </div>
+                          {/* Username */}
+                          <div className="space-y-1.5">
+                            <label className="text-[10px] font-bold text-slate-455 uppercase tracking-wider">Username</label>
+                            <Input
+                              value={username}
+                              onChange={(e) => setUsername(e.target.value)}
+                              placeholder="postgres"
+                              className="bg-slate-900 border-slate-800 focus:border-indigo-500 h-10 rounded-xl text-xs text-white"
+                            />
+                          </div>
+                          {/* Password */}
+                          <div className="space-y-1.5">
+                            <label className="text-[10px] font-bold text-slate-455 uppercase tracking-wider">Password</label>
+                            <Input
+                              type="password"
+                              value={password}
+                              onChange={(e) => setPassword(e.target.value)}
+                              placeholder="••••••••"
+                              className="bg-slate-900 border-slate-800 focus:border-indigo-500 h-10 rounded-xl text-xs text-white"
+                            />
+                          </div>
                         </div>
-                        {/* Password */}
-                        <div className="space-y-1.5">
-                          <label className="text-[10px] font-bold text-slate-455 uppercase tracking-wider">Password</label>
-                          <Input
-                            type="password"
-                            value={password}
-                            onChange={(e) => setPassword(e.target.value)}
-                            placeholder="••••••••"
-                            className="bg-slate-900 border-slate-800 focus:border-indigo-500 h-10 rounded-xl text-xs text-white"
-                          />
-                        </div>
-                      </div>
+                      )
                     ) : (
                       <div className="space-y-2 pt-2">
                         <label className="text-[10px] font-bold text-slate-455 uppercase tracking-wider">Connection String (URI)</label>
                         <Input
                           value={connectionString}
                           onChange={(e) => setConnectionString(e.target.value)}
-                          placeholder={`${dbType}://username:password@host:port/database`}
+                          placeholder={dbType === 'snowflake' 
+                            ? "snowflake://username:password@account/database/schema?warehouse=wh&role=rl" 
+                            : `${dbType}://username:password@host:port/database`}
                           className="bg-slate-900 border-slate-800 focus:border-indigo-500 h-11 rounded-xl text-xs font-mono text-white"
                         />
                       </div>
@@ -2461,7 +2635,7 @@ export default function ChatPage() {
                     </Button>
                     <Button
                       onClick={handleTestConnection}
-                      disabled={isTesting || isSaving || (connectionMethod === 'string' ? !connectionString : !databaseName)}
+                      disabled={isTesting || isSaving || (connectionMethod === 'string' ? !connectionString : (dbType === 'snowflake' ? (!databaseName || !account) : !databaseName))}
                       className="w-1/3 bg-slate-900 border border-slate-800 hover:bg-slate-800 text-white font-bold h-11 rounded-xl cursor-pointer disabled:opacity-50"
                     >
                       {isTesting ? (

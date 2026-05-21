@@ -84,6 +84,26 @@ const DB_TYPES = [
       </div>
     ),
   },
+  {
+    id: "elasticsearch",
+    name: "Elasticsearch",
+    description: "Distributed search and analytics engine.",
+    icon: (
+      <div className="h-10 w-10 rounded-xl bg-amber-500/10 flex items-center justify-center">
+        <span className="text-xl">🔍</span>
+      </div>
+    ),
+  },
+  {
+    id: "snowflake",
+    name: "SnowFlake",
+    description: "Cloud-hosted data warehouse optimized for analytics.",
+    icon: (
+      <div className="h-10 w-10 rounded-xl bg-cyan-500/10 flex items-center justify-center">
+        <span className="text-xl">❄️</span>
+      </div>
+    ),
+  },
 ];
 
 export default function DatabasesPage() {
@@ -91,14 +111,14 @@ export default function DatabasesPage() {
   const [connections, setConnections] = useState<any[]>([]);
   const [editingConnection, setEditingConnection] = useState<any | null>(null);
   const [dbFavorites, setDbFavorites] = useState<string[]>([]);
-  
+
   // Form State
   const [dbType, setDbType] = useState("postgresql");
   const [connectionString, setConnectionString] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [isTesting, setIsTesting] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  const [testResult, setTestResult] = useState<{status: 'success' | 'error', message: string} | null>(null);
+  const [testResult, setTestResult] = useState<{ status: 'success' | 'error', message: string } | null>(null);
 
   // Field Connection States
   const [connectionMethod, setConnectionMethod] = useState<'string' | 'params'>('string');
@@ -108,11 +128,39 @@ export default function DatabasesPage() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
 
+  // Snowflake-specific States
+  const [account, setAccount] = useState("");
+  const [warehouse, setWarehouse] = useState("");
+  const [schemaName, setSchemaName] = useState("");
+  const [role, setRole] = useState("");
+
+  // Elasticsearch-specific States
+  const [apiKey, setApiKey] = useState("");
+  const [cloudId, setCloudId] = useState("");
+
+  const clearForm = () => {
+    setConnectionString("");
+    setDisplayName("");
+    setHost("");
+    setPort("");
+    setDatabase("");
+    setUsername("");
+    setPassword("");
+    setAccount("");
+    setWarehouse("");
+    setSchemaName("");
+    setRole("");
+    setApiKey("");
+    setCloudId("");
+    setTestResult(null);
+  };
+
   const getDefaultPort = (type: string) => {
     switch (type) {
       case 'postgresql': return 5432;
       case 'mysql': return 3306;
       case 'mongodb': return 27017;
+      case 'elasticsearch': return 9200;
       case 'vector': return 6333;
       case 'graph': return 7687;
       default: return 5432;
@@ -151,29 +199,22 @@ export default function DatabasesPage() {
 
   useEffect(() => {
     setTestResult(null);
-  }, [dbType, connectionMethod, host, port, database, username, password, connectionString]);
+  }, [dbType, connectionMethod, host, port, database, username, password, connectionString, account, warehouse, schemaName, role]);
 
   const parseConnectionString = (urlStr: string) => {
     try {
-      // 1. Extract protocol/prefix
       const protocolMatch = urlStr.match(/^([^:]+):\/\/(.*)$/);
       if (!protocolMatch) return null;
-      
       let type = protocolMatch[1].toLowerCase();
       if (type === 'postgres') type = 'postgresql';
-      
       const rest = protocolMatch[2];
-      
       let username = "";
       let password = "";
       let hostPortDb = rest;
-      
-      // 2. Extract credentials by finding the RIGHTMOST '@'
       const lastAtIndex = rest.lastIndexOf('@');
       if (lastAtIndex !== -1) {
         const credentialsPart = rest.substring(0, lastAtIndex);
         hostPortDb = rest.substring(lastAtIndex + 1);
-        
         const firstColonIndex = credentialsPart.indexOf(':');
         if (firstColonIndex !== -1) {
           username = decodeURIComponent(credentialsPart.substring(0, firstColonIndex));
@@ -182,38 +223,63 @@ export default function DatabasesPage() {
           username = decodeURIComponent(credentialsPart);
         }
       }
-      
-      // 3. Separate hostPort and database name
+      if (type === 'snowflake') {
+        let account = "";
+        let database = "";
+        let schemaName = "";
+        let warehouse = "";
+        let role = "";
+
+        const qIndex = hostPortDb.indexOf('?');
+        let pathPart = qIndex !== -1 ? hostPortDb.substring(0, qIndex) : hostPortDb;
+        const queryPart = qIndex !== -1 ? hostPortDb.substring(qIndex + 1) : "";
+
+        const pathParts = pathPart.split('/');
+        account = pathParts[0] || "";
+        database = pathParts[1] || "";
+        schemaName = pathParts[2] || "";
+
+        if (queryPart) {
+          const params = new URLSearchParams(queryPart);
+          warehouse = params.get('warehouse') || "";
+          role = params.get('role') || "";
+        }
+        return { type, username, password, account, database, schemaName, warehouse, role };
+      }
       let hostPort = hostPortDb;
       let database = "";
-      const firstSlashIndex = hostPortDb.indexOf('/');
+      let apiKey = "";
+      let cloudId = "";
+
+      const qIndex = hostPortDb.indexOf('?');
+      let pathPart = qIndex !== -1 ? hostPortDb.substring(0, qIndex) : hostPortDb;
+      const queryPart = qIndex !== -1 ? hostPortDb.substring(qIndex + 1) : "";
+
+      const firstSlashIndex = pathPart.indexOf('/');
       if (firstSlashIndex !== -1) {
-        hostPort = hostPortDb.substring(0, firstSlashIndex);
-        database = hostPortDb.substring(firstSlashIndex + 1);
+        hostPort = pathPart.substring(0, firstSlashIndex);
+        database = pathPart.substring(firstSlashIndex + 1);
+      } else {
+        hostPort = pathPart;
       }
-      
-      // 4. Separate host and port
+
+      if (queryPart) {
+        const params = new URLSearchParams(queryPart);
+        apiKey = params.get('api_key') || "";
+        cloudId = params.get('cloud_id') || "";
+      }
+
       let host = hostPort;
-      let port = type === 'postgresql' ? 5432 : (type === 'mongodb' ? 27017 : 3306);
-      
+      let port = type === 'postgresql' ? 5432 : (type === 'mongodb' ? 27017 : (type === 'elasticsearch' ? 9200 : 3306));
       const lastColonIndex = hostPort.lastIndexOf(':');
       if (lastColonIndex !== -1) {
         const portStr = hostPort.substring(lastColonIndex + 1);
-        // Ensure it is a valid port string, not part of a hostname or IPv6
         if (/^\d+$/.test(portStr)) {
           host = hostPort.substring(0, lastColonIndex);
           port = parseInt(portStr);
         }
       }
-      
-      return {
-        type,
-        host,
-        port,
-        database,
-        username,
-        password
-      };
+      return { type, host, port, database, username, password, api_key: apiKey, cloud_id: cloudId };
     } catch (e) {
       return null;
     }
@@ -228,21 +294,45 @@ export default function DatabasesPage() {
     setDatabase(conn.database || "");
     setUsername(conn.username || "");
     setPassword(conn.password || "");
-    
+    setAccount(conn.account || "");
+    setWarehouse(conn.warehouse || "");
+    setSchemaName(conn.schema_name || "");
+    setRole(conn.role || "");
+    setApiKey(conn.api_key || "");
+    setCloudId(conn.cloud_id || "");
+
     // Format connection string from connection object
     let connStr = "";
     if (conn.type === "sqlite") {
       connStr = `sqlite:///${conn.database}`;
+    } else if (conn.type === "snowflake") {
+      const user = conn.username ? decodeURIComponent(conn.username) : "";
+      const pass = conn.password ? decodeURIComponent(conn.password) : "";
+      const auth = (user || pass) ? `${user}:${pass}@` : "";
+      const schema = conn.schema_name ? `/${conn.schema_name}` : "";
+      let params = "";
+      const pList = [];
+      if (conn.warehouse) pList.push(`warehouse=${conn.warehouse}`);
+      if (conn.role) pList.push(`role=${conn.role}`);
+      if (pList.length > 0) params = `?${pList.join("&")}`;
+      connStr = `snowflake://${auth}${conn.account || ""}/${conn.database || ""}${schema}${params}`;
     } else {
       const user = conn.username ? decodeURIComponent(conn.username) : "";
       const pass = conn.password ? decodeURIComponent(conn.password) : "";
       const auth = (user || pass) ? `${user}:${pass}@` : "";
       const portStr = conn.port ? `:${conn.port}` : "";
-      connStr = `${conn.type}://${auth}${conn.host || ""}${portStr}/${conn.database || ""}`;
+      let params = "";
+      const pList = [];
+      if (conn.type === "elasticsearch") {
+        if (conn.api_key) pList.push(`api_key=${conn.api_key}`);
+        if (conn.cloud_id) pList.push(`cloud_id=${conn.cloud_id}`);
+      }
+      if (pList.length > 0) params = `?${pList.join("&")}`;
+      connStr = `${conn.type}://${auth}${conn.host || ""}${portStr}/${conn.database || ""}${params}`;
     }
     setConnectionString(connStr);
-    
-    if (conn.host || conn.username) {
+
+    if (conn.host || conn.username || conn.account) {
       setConnectionMethod("params");
     } else {
       setConnectionMethod("string");
@@ -288,23 +378,45 @@ export default function DatabasesPage() {
       payload = {
         name: displayName || `${parsed.type}_${parsed.database}`,
         type: parsed.type,
-        host: parsed.host,
-        port: parsed.port,
         database: parsed.database,
         username: parsed.username,
         password: parsed.password
       };
+      if (parsed.type === 'snowflake') {
+        payload.account = (parsed as any).account;
+        payload.warehouse = (parsed as any).warehouse;
+        payload.schema_name = (parsed as any).schemaName;
+        payload.role = (parsed as any).role;
+      } else {
+        payload.host = parsed.host;
+        payload.port = parsed.port;
+        if (parsed.type === 'elasticsearch') {
+          payload.api_key = (parsed as any).api_key;
+          payload.cloud_id = (parsed as any).cloud_id;
+        }
+      }
     } else {
       if (!database) return null;
       payload = {
         name: displayName || `${dbType}_${database}`,
         type: dbType,
-        host: host || "localhost",
-        port: port ? parseInt(port) : getDefaultPort(dbType),
         database: database,
         username: username,
         password: password
       };
+      if (dbType === 'snowflake') {
+        payload.account = account;
+        payload.warehouse = warehouse;
+        payload.schema_name = schemaName;
+        payload.role = role;
+      } else {
+        payload.host = host || "localhost";
+        payload.port = port ? parseInt(port) : getDefaultPort(dbType);
+        if (dbType === 'elasticsearch') {
+          payload.api_key = apiKey;
+          payload.cloud_id = cloudId;
+        }
+      }
     }
     return payload;
   };
@@ -315,10 +427,10 @@ export default function DatabasesPage() {
       setTestResult({ status: 'error', message: "Please fill in all required fields first" });
       return;
     }
-    
+
     setIsTesting(true);
     setTestResult(null);
-    
+
     try {
       const res = await fetch("http://localhost:8000/databases/test", {
         method: "POST",
@@ -341,44 +453,37 @@ export default function DatabasesPage() {
   const handleSaveConnection = async () => {
     const payload = getConnectionPayload();
     if (!payload) return;
-    
+
     setIsSaving(true);
-    
+
     try {
-      const url = editingConnection 
+      const url = editingConnection
         ? `http://localhost:8000/databases/${editingConnection.id}`
         : "http://localhost:8000/databases";
-      
+
       const method = editingConnection ? "PUT" : "POST";
-      
+
       const res = await fetch(url, {
         method: method,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
       });
-      
+
       if (res.ok) {
-        setTestResult({ 
-          status: 'success', 
-          message: editingConnection ? "Successfully updated connection!" : "Successfully connected and saved!" 
+        setTestResult({
+          status: 'success',
+          message: editingConnection ? "Successfully updated connection!" : "Successfully connected and saved!"
         });
         fetchConnections();
         setTimeout(() => {
           setShowAddForm(false);
           setEditingConnection(null);
-          setConnectionString("");
-          setDisplayName("");
-          setHost("");
-          setPort("");
-          setDatabase("");
-          setUsername("");
-          setPassword("");
-          setTestResult(null);
+          clearForm();
         }, 1500);
       } else {
-        setTestResult({ 
-          status: 'error', 
-          message: editingConnection ? "Failed to update connection details." : "Failed to save connection details." 
+        setTestResult({
+          status: 'error',
+          message: editingConnection ? "Failed to update connection details." : "Failed to save connection details."
         });
       }
     } catch (e) {
@@ -412,20 +517,13 @@ export default function DatabasesPage() {
               Connect and manage all your data sources.
             </p>
           </div>
-          <Button 
+          <Button
             onClick={() => {
               setEditingConnection(null);
-              setConnectionString("");
-              setDisplayName("");
-              setHost("");
-              setPort("");
-              setDatabase("");
-              setUsername("");
-              setPassword("");
+              clearForm();
               setDbType("postgresql");
               setConnectionMethod("string");
               setShowAddForm(true);
-              setTestResult(null);
             }}
             className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-6 h-11 rounded-xl shadow-lg shadow-indigo-600/20"
           >
@@ -462,19 +560,12 @@ export default function DatabasesPage() {
                   <p className="text-sm text-slate-400 mb-6 leading-relaxed max-w-sm">
                     Connect and manage all your data sources. Add your first database connection to get started with natural language queries!
                   </p>
-                  <Button 
+                  <Button
                     onClick={() => {
                       setDbType("postgresql");
                       setEditingConnection(null);
-                      setConnectionString("");
-                      setDisplayName("");
-                      setHost("");
-                      setPort("");
-                      setDatabase("");
-                      setUsername("");
-                      setPassword("");
+                      clearForm();
                       setConnectionMethod("string");
-                      setTestResult(null);
                       setShowAddForm(true);
                     }}
                     className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold h-11 px-8 rounded-xl shadow-lg shadow-indigo-600/20 cursor-pointer flex items-center gap-2 animate-bounce"
@@ -497,7 +588,7 @@ export default function DatabasesPage() {
                 )
               };
 
-               return (
+              return (
                 <motion.div
                   key={card.id}
                   variants={itemVariants}
@@ -510,7 +601,7 @@ export default function DatabasesPage() {
                         <MoreHorizontal className="h-4 w-4" />
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end" className="w-48 bg-slate-900 border border-slate-800 text-slate-200 rounded-xl shadow-xl p-1">
-                        <DropdownMenuItem 
+                        <DropdownMenuItem
                           onClick={() => handleToggleConnect(card.conn)}
                           className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-slate-800 hover:text-white rounded-lg text-sm font-medium transition-colors"
                         >
@@ -526,24 +617,24 @@ export default function DatabasesPage() {
                             </>
                           )}
                         </DropdownMenuItem>
-                        
-                        <DropdownMenuItem 
+
+                        <DropdownMenuItem
                           onClick={() => handleToggleFavoriteDb(card.id)}
                           className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-slate-800 hover:text-white rounded-lg text-sm font-medium transition-colors"
                         >
                           <Star className={`h-4 w-4 ${dbFavorites.includes(card.id) ? 'text-amber-400 fill-amber-400' : 'text-slate-500'}`} />
                           <span>{dbFavorites.includes(card.id) ? "Unfavorite" : "Favorite"}</span>
                         </DropdownMenuItem>
-                        
-                        <DropdownMenuItem 
+
+                        <DropdownMenuItem
                           onClick={() => startEdit(card.conn)}
                           className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-slate-800 hover:text-white rounded-lg text-sm font-medium transition-colors"
                         >
                           <Edit className="h-4 w-4 text-blue-500" />
                           <span>Edit</span>
                         </DropdownMenuItem>
-                        
-                        <DropdownMenuItem 
+
+                        <DropdownMenuItem
                           onClick={() => handleDelete(card.conn.id)}
                           className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-red-500/10 hover:text-red-400 text-red-500 rounded-lg text-sm font-medium transition-colors"
                         >
@@ -553,7 +644,7 @@ export default function DatabasesPage() {
                       </DropdownMenuContent>
                     </DropdownMenu>
                   </div>
-                  
+
                   <div className="flex-1">
                     <h3 className="text-lg font-bold text-white mb-2 flex items-center gap-2">
                       {card.name}
@@ -571,11 +662,10 @@ export default function DatabasesPage() {
                     <button
                       type="button"
                       onClick={() => handleToggleConnect(card.conn)}
-                      className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border transition-all duration-200 ${
-                        card.isConnected 
-                          ? 'bg-emerald-500/10 border-emerald-500/20 hover:bg-emerald-500/20 text-emerald-400 cursor-pointer shadow-md shadow-emerald-500/5'
-                          : 'bg-slate-800/50 border-slate-700/50 hover:bg-slate-700/50 text-slate-400 cursor-pointer'
-                      }`}
+                      className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border transition-all duration-200 ${card.isConnected
+                        ? 'bg-emerald-500/10 border-emerald-500/20 hover:bg-emerald-500/20 text-emerald-400 cursor-pointer shadow-md shadow-emerald-500/5'
+                        : 'bg-slate-800/50 border-slate-700/50 hover:bg-slate-700/50 text-slate-400 cursor-pointer'
+                        }`}
                       title={card.isConnected ? "Click to Disconnect" : "Click to Connect"}
                     >
                       <div className={`h-2 w-2 rounded-full ${card.isConnected ? 'bg-emerald-500 animate-pulse' : 'bg-slate-500'}`} />
@@ -602,13 +692,7 @@ export default function DatabasesPage() {
                 onClick={() => {
                   setShowAddForm(false);
                   setEditingConnection(null);
-                  setConnectionString("");
-                  setDisplayName("");
-                  setHost("");
-                  setPort("");
-                  setDatabase("");
-                  setUsername("");
-                  setPassword("");
+                  clearForm();
                 }}
                 className="absolute inset-0 bg-black/80 backdrop-blur-md"
               />
@@ -627,13 +711,7 @@ export default function DatabasesPage() {
                   onClick={() => {
                     setShowAddForm(false);
                     setEditingConnection(null);
-                    setConnectionString("");
-                    setDisplayName("");
-                    setHost("");
-                    setPort("");
-                    setDatabase("");
-                    setUsername("");
-                    setPassword("");
+                    clearForm();
                   }}
                   className="absolute top-5 right-5 text-slate-400 hover:text-white transition-colors p-1 hover:bg-slate-800/50 rounded-lg cursor-pointer"
                 >
@@ -655,7 +733,7 @@ export default function DatabasesPage() {
                     {/* Database Type Select */}
                     <div className="space-y-3">
                       <label className="text-sm font-bold text-slate-300">Select Database Type</label>
-                      <Select value={dbType} onValueChange={setDbType}>
+                      <Select value={dbType} onValueChange={(val) => val && setDbType(val)}>
                         <SelectTrigger className="w-full bg-[var(--surface-0)] border-slate-800 h-12 rounded-xl px-4 text-white hover:border-slate-700">
                           <SelectValue placeholder="Select type" />
                         </SelectTrigger>
@@ -674,7 +752,7 @@ export default function DatabasesPage() {
                     {/* Project Name Input */}
                     <div className="space-y-3">
                       <label className="text-sm font-bold text-slate-300">Project Name</label>
-                      <Input 
+                      <Input
                         value={displayName}
                         onChange={(e) => setDisplayName(e.target.value)}
                         placeholder="e.g., Sales Analysis Project"
@@ -687,28 +765,26 @@ export default function DatabasesPage() {
                   <div className="space-y-4 pt-4 border-t border-slate-800/50">
                     <div className="flex items-center justify-between">
                       <h3 className="text-sm font-bold text-white uppercase tracking-wider">Connection Details</h3>
-                      
+
                       {/* Method Toggle Tab */}
                       <div className="flex gap-1 p-0.5 bg-slate-900 border border-slate-800 rounded-lg">
                         <button
                           type="button"
                           onClick={() => setConnectionMethod('string')}
-                          className={`px-3 py-1.5 text-xs font-bold rounded-md transition-all cursor-pointer ${
-                            connectionMethod === 'string' 
-                              ? 'bg-indigo-600 text-white shadow shadow-indigo-600/10' 
-                              : 'text-slate-400 hover:text-white'
-                          }`}
+                          className={`px-3 py-1.5 text-xs font-bold rounded-md transition-all cursor-pointer ${connectionMethod === 'string'
+                            ? 'bg-indigo-600 text-white shadow shadow-indigo-600/10'
+                            : 'text-slate-400 hover:text-white'
+                            }`}
                         >
                           URI String
                         </button>
                         <button
                           type="button"
                           onClick={() => setConnectionMethod('params')}
-                          className={`px-3 py-1.5 text-xs font-bold rounded-md transition-all cursor-pointer ${
-                            connectionMethod === 'params' 
-                              ? 'bg-indigo-600 text-white shadow shadow-indigo-600/10' 
-                              : 'text-slate-400 hover:text-white'
-                          }`}
+                          className={`px-3 py-1.5 text-xs font-bold rounded-md transition-all cursor-pointer ${connectionMethod === 'params'
+                            ? 'bg-indigo-600 text-white shadow shadow-indigo-600/10'
+                            : 'text-slate-400 hover:text-white'
+                            }`}
                         >
                           Form Parameters
                         </button>
@@ -716,70 +792,231 @@ export default function DatabasesPage() {
                     </div>
 
                     {connectionMethod === 'params' ? (
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                        {/* Host */}
-                        <div className="col-span-2 space-y-2">
-                          <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">Host</label>
-                          <Input 
-                            value={host}
-                            onChange={(e) => setHost(e.target.value)}
-                            placeholder="localhost"
-                            className="bg-[var(--surface-0)] border-slate-800 focus:border-indigo-500 h-11 rounded-xl text-sm text-white"
-                          />
-                        </div>
-                        {/* Port */}
-                        <div className="space-y-2">
-                          <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">Port</label>
-                          <Input 
-                            value={port}
-                            onChange={(e) => setPort(e.target.value)}
-                            placeholder={String(getDefaultPort(dbType))}
-                            className="bg-[var(--surface-0)] border-slate-800 focus:border-indigo-500 h-11 rounded-xl text-sm text-white"
-                          />
-                        </div>
+                      dbType === 'elasticsearch' ? (
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                          {/* Cloud ID */}
+                          <div className="col-span-3 space-y-2">
+                            <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">Cloud ID (Optional)</label>
+                            <Input
+                              value={cloudId}
+                              onChange={(e) => setCloudId(e.target.value)}
+                              placeholder="e.g., my-deployment:dXMtZWFzdC0xLmF3cy5mb3VuZC5pbyQ..."
+                              className="bg-[var(--surface-0)] border-slate-800 focus:border-indigo-500 h-11 rounded-xl text-sm text-white"
+                            />
+                          </div>
 
-                        {/* Database Name */}
-                        <div className="space-y-2">
-                          <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">Database Name</label>
-                          <Input 
-                            value={database}
-                            onChange={(e) => setDatabase(e.target.value)}
-                            placeholder="e.g., main_db"
-                            className="bg-[var(--surface-0)] border-slate-800 focus:border-indigo-500 h-11 rounded-xl text-sm text-white"
-                          />
+                          {/* API Key */}
+                          <div className="col-span-3 space-y-2">
+                            <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">API Key (Optional)</label>
+                            <Input
+                              type="password"
+                              value={apiKey}
+                              onChange={(e) => setApiKey(e.target.value)}
+                              placeholder="e.g., V1M2a0... (for Cloud/API Key authentication)"
+                              className="bg-[var(--surface-0)] border-slate-800 focus:border-indigo-500 h-11 rounded-xl text-sm text-white"
+                            />
+                          </div>
+
+                          {/* Host */}
+                          <div className="col-span-2 space-y-2">
+                            <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">Host / Endpoint</label>
+                            <Input
+                              value={host}
+                              onChange={(e) => setHost(e.target.value)}
+                              placeholder="e.g., localhost or my-es-project.es.asia-south1.gcp.elastic.cloud"
+                              className="bg-[var(--surface-0)] border-slate-800 focus:border-indigo-500 h-11 rounded-xl text-sm text-white"
+                            />
+                          </div>
+
+                          {/* Port */}
+                          <div className="space-y-2">
+                            <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">Port</label>
+                            <Input
+                              value={port}
+                              onChange={(e) => setPort(e.target.value)}
+                              placeholder="9200"
+                              className="bg-[var(--surface-0)] border-slate-800 focus:border-indigo-500 h-11 rounded-xl text-sm text-white"
+                            />
+                          </div>
+
+                          {/* Database Name (Index) */}
+                          <div className="space-y-2">
+                            <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">Index Name</label>
+                            <Input
+                              value={database}
+                              onChange={(e) => setDatabase(e.target.value)}
+                              placeholder="e.g., products"
+                              className="bg-[var(--surface-0)] border-slate-800 focus:border-indigo-500 h-11 rounded-xl text-sm text-white"
+                            />
+                          </div>
+
+                          {/* Username */}
+                          <div className="space-y-2">
+                            <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">Username</label>
+                            <Input
+                              value={username}
+                              onChange={(e) => setUsername(e.target.value)}
+                              placeholder="elastic"
+                              className="bg-[var(--surface-0)] border-slate-800 focus:border-indigo-500 h-11 rounded-xl text-sm text-white"
+                            />
+                          </div>
+
+                          {/* Password */}
+                          <div className="space-y-2">
+                            <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">Password</label>
+                            <Input
+                              type="password"
+                              value={password}
+                              onChange={(e) => setPassword(e.target.value)}
+                              placeholder="••••••••"
+                              className="bg-[var(--surface-0)] border-slate-800 focus:border-indigo-500 h-11 rounded-xl text-sm text-white"
+                            />
+                          </div>
                         </div>
-                        {/* Username */}
-                        <div className="space-y-2">
-                          <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">Username</label>
-                          <Input 
-                            value={username}
-                            onChange={(e) => setUsername(e.target.value)}
-                            placeholder="postgres"
-                            className="bg-[var(--surface-0)] border-slate-800 focus:border-indigo-500 h-11 rounded-xl text-sm text-white"
-                          />
+                      ) : dbType === 'snowflake' ? (
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                          {/* Account */}
+                          <div className="col-span-2 space-y-2">
+                            <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">Account Identifier</label>
+                            <Input
+                              value={account}
+                              onChange={(e) => setAccount(e.target.value)}
+                              placeholder="e.g., xy12345.us-east-2.aws"
+                              className="bg-[var(--surface-0)] border-slate-800 focus:border-indigo-500 h-11 rounded-xl text-sm text-white"
+                            />
+                          </div>
+                          {/* Warehouse */}
+                          <div className="space-y-2">
+                            <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">Warehouse</label>
+                            <Input
+                              value={warehouse}
+                              onChange={(e) => setWarehouse(e.target.value)}
+                              placeholder="e.g., COMPUTE_WH"
+                              className="bg-[var(--surface-0)] border-slate-800 focus:border-indigo-500 h-11 rounded-xl text-sm text-white"
+                            />
+                          </div>
+
+                          {/* Database Name */}
+                          <div className="space-y-2">
+                            <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">Database Name</label>
+                            <Input
+                              value={database}
+                              onChange={(e) => setDatabase(e.target.value)}
+                              placeholder="e.g., SNOWFLAKE_SAMPLE_DATA"
+                              className="bg-[var(--surface-0)] border-slate-800 focus:border-indigo-500 h-11 rounded-xl text-sm text-white"
+                            />
+                          </div>
+                          {/* Schema Name */}
+                          <div className="space-y-2">
+                            <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">Schema Name</label>
+                            <Input
+                              value={schemaName}
+                              onChange={(e) => setSchemaName(e.target.value)}
+                              placeholder="e.g., PUBLIC"
+                              className="bg-[var(--surface-0)] border-slate-800 focus:border-indigo-500 h-11 rounded-xl text-sm text-white"
+                            />
+                          </div>
+                          {/* Role */}
+                          <div className="space-y-2">
+                            <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">Role</label>
+                            <Input
+                              value={role}
+                              onChange={(e) => setRole(e.target.value)}
+                              placeholder="e.g., ACCOUNTADMIN"
+                              className="bg-[var(--surface-0)] border-slate-800 focus:border-indigo-500 h-11 rounded-xl text-sm text-white"
+                            />
+                          </div>
+
+                          {/* Username */}
+                          <div className="space-y-2">
+                            <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">Username</label>
+                            <Input
+                              value={username}
+                              onChange={(e) => setUsername(e.target.value)}
+                              placeholder="e.g., USERNAME"
+                              className="bg-[var(--surface-0)] border-slate-800 focus:border-indigo-500 h-11 rounded-xl text-sm text-white"
+                            />
+                          </div>
+                          {/* Password */}
+                          <div className="col-span-2 space-y-2">
+                            <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">Password</label>
+                            <Input
+                              type="password"
+                              value={password}
+                              onChange={(e) => setPassword(e.target.value)}
+                              placeholder="••••••••"
+                              className="bg-[var(--surface-0)] border-slate-800 focus:border-indigo-500 h-11 rounded-xl text-sm text-white"
+                            />
+                          </div>
                         </div>
-                        {/* Password */}
-                        <div className="space-y-2">
-                          <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">Password</label>
-                          <Input 
-                            type="password"
-                            value={password}
-                            onChange={(e) => setPassword(e.target.value)}
-                            placeholder="••••••••"
-                            className="bg-[var(--surface-0)] border-slate-800 focus:border-indigo-500 h-11 rounded-xl text-sm text-white"
-                          />
+                      ) : (
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                          {/* Host */}
+                          <div className="col-span-2 space-y-2">
+                            <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">Host</label>
+                            <Input
+                              value={host}
+                              onChange={(e) => setHost(e.target.value)}
+                              placeholder="localhost"
+                              className="bg-[var(--surface-0)] border-slate-800 focus:border-indigo-500 h-11 rounded-xl text-sm text-white"
+                            />
+                          </div>
+                          {/* Port */}
+                          <div className="space-y-2">
+                            <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">Port</label>
+                            <Input
+                              value={port}
+                              onChange={(e) => setPort(e.target.value)}
+                              placeholder={String(getDefaultPort(dbType))}
+                              className="bg-[var(--surface-0)] border-slate-800 focus:border-indigo-500 h-11 rounded-xl text-sm text-white"
+                            />
+                          </div>
+
+                          {/* Database Name */}
+                          <div className="space-y-2">
+                            <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">Database Name</label>
+                            <Input
+                              value={database}
+                              onChange={(e) => setDatabase(e.target.value)}
+                              placeholder="e.g., main_db"
+                              className="bg-[var(--surface-0)] border-slate-800 focus:border-indigo-500 h-11 rounded-xl text-sm text-white"
+                            />
+                          </div>
+                          {/* Username */}
+                          <div className="space-y-2">
+                            <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">Username</label>
+                            <Input
+                              value={username}
+                              onChange={(e) => setUsername(e.target.value)}
+                              placeholder="postgres"
+                              className="bg-[var(--surface-0)] border-slate-800 focus:border-indigo-500 h-11 rounded-xl text-sm text-white"
+                            />
+                          </div>
+                          {/* Password */}
+                          <div className="space-y-2">
+                            <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">Password</label>
+                            <Input
+                              type="password"
+                              value={password}
+                              onChange={(e) => setPassword(e.target.value)}
+                              placeholder="••••••••"
+                              className="bg-[var(--surface-0)] border-slate-800 focus:border-indigo-500 h-11 rounded-xl text-sm text-white"
+                            />
+                          </div>
                         </div>
-                      </div>
+                      )
                     ) : (
                       <div className="space-y-3">
                         <div className="flex items-center justify-between">
                           <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">Connection String (URI)</label>
                           <span className="text-[10px] font-bold text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded uppercase tracking-wider">Required</span>
                         </div>
-                        <Input 
+                        <Input
                           value={connectionString}
                           onChange={(e) => setConnectionString(e.target.value)}
-                          placeholder={`${dbType}://username:password@host:port/database`}
+                          placeholder={dbType === 'snowflake'
+                            ? "snowflake://username:password@account/database/schema?warehouse=wh&role=rl"
+                            : `${dbType}://username:password@host:port/database`}
                           className="bg-[var(--surface-0)] border-slate-800 focus:border-indigo-500 h-12 rounded-xl text-sm placeholder:text-slate-600 font-mono text-white"
                         />
                         <p className="text-xs text-slate-500 font-medium">Provide a valid {dbType} connection string.</p>
@@ -787,14 +1024,13 @@ export default function DatabasesPage() {
                     )}
 
                     {testResult && (
-                      <motion.div 
+                      <motion.div
                         initial={{ opacity: 0, scale: 0.95 }}
                         animate={{ opacity: 1, scale: 1 }}
-                        className={`p-4 rounded-xl flex items-start gap-3 border ${
-                          testResult.status === 'success' 
-                            ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
-                            : 'bg-rose-500/10 border-rose-500/20 text-rose-400'
-                        }`}
+                        className={`p-4 rounded-xl flex items-start gap-3 border ${testResult.status === 'success'
+                          ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
+                          : 'bg-rose-500/10 border-rose-500/20 text-rose-400'
+                          }`}
                       >
                         {testResult.status === 'success' ? <CheckCircle2 className="h-5 w-5 mt-0.5 shrink-0" /> : <AlertCircle className="h-5 w-5 mt-0.5 shrink-0" />}
                         <p className="text-sm font-medium">{testResult.message}</p>
@@ -804,19 +1040,12 @@ export default function DatabasesPage() {
 
                   {/* Action Buttons */}
                   <div className="flex items-center justify-between pt-6 mt-4 border-t border-slate-800/50">
-                    <Button 
-                      variant="ghost" 
+                    <Button
+                      variant="ghost"
                       onClick={() => {
                         setShowAddForm(false);
                         setEditingConnection(null);
-                        setConnectionString("");
-                        setDisplayName("");
-                        setHost("");
-                        setPort("");
-                        setDatabase("");
-                        setUsername("");
-                        setPassword("");
-                        setTestResult(null);
+                        clearForm();
                       }}
                       className="text-slate-400 hover:text-white hover:bg-slate-800 h-11 px-6 rounded-xl font-bold cursor-pointer"
                     >
@@ -825,9 +1054,9 @@ export default function DatabasesPage() {
 
                     <div className="flex items-center gap-3">
                       {/* Test Connection Button */}
-                      <Button 
+                      <Button
                         onClick={handleTestConnection}
-                        disabled={isTesting || isSaving || (connectionMethod === 'string' ? !connectionString : !database)}
+                        disabled={isTesting || isSaving || (connectionMethod === 'string' ? !connectionString : (dbType === 'snowflake' ? (!database || !account) : !database))}
                         className="bg-slate-900 border border-slate-800 hover:bg-slate-800 text-white font-bold h-11 px-6 rounded-xl cursor-pointer disabled:opacity-50"
                       >
                         {isTesting ? (
@@ -841,7 +1070,7 @@ export default function DatabasesPage() {
                       </Button>
 
                       {/* Save & Connect Button (Only clickable if Test is successful) */}
-                      <Button 
+                      <Button
                         onClick={handleSaveConnection}
                         disabled={isSaving || isTesting || !testResult || testResult.status !== 'success'}
                         className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold h-11 px-6 rounded-xl shadow-lg shadow-indigo-600/20 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer transition-all duration-200"

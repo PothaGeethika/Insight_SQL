@@ -80,5 +80,35 @@ class ConnectionManager:
             if user and password:
                 return f"mongodb://{user}:{password}@{conn.host}:{conn.port}/{conn.database}?authSource=admin"
             return f"mongodb://{conn.host}:{conn.port}/{conn.database}"
+        elif conn.type == "snowflake":
+            schema = conn.schema_name or "PUBLIC"
+            url = f"snowflake://{user}:{password}@{conn.account}/{conn.database}/{schema}"
+            params = []
+            if conn.warehouse:
+                params.append(f"warehouse={conn.warehouse}")
+            if conn.role:
+                params.append(f"role={conn.role}")
+            if params:
+                url += "?" + "&".join(params)
+            return url
+        elif conn.type == "elasticsearch":
+            params = []
+            if conn.api_key:
+                params.append(f"api_key={conn.api_key}")
+            if conn.cloud_id:
+                params.append(f"cloud_id={conn.cloud_id}")
+            
+            host_part = conn.host or ""
+            port_part = f":{conn.port}" if conn.port else ""
+            
+            if user and password:
+                url = f"elasticsearch://{user}:{password}@{host_part}{port_part}/{conn.database}"
+            else:
+                url = f"elasticsearch://{host_part}{port_part}/{conn.database}"
+                
+            if params:
+                url += "?" + "&".join(params)
+            return url
         else:
             raise ValueError(f"Unsupported database type: {conn.type}")
+

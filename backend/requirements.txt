@@ -13,3 +13,8 @@ pydantic
 langgraph
 pandas
 pymongo
+snowflake-connector-python
+snowflake-sqlalchemy
+pymysql
+cryptography
+elasticsearch

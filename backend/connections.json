@@ -8,7 +8,7 @@
         "username": "postgres",
         "password": "Geethuhyma@2902",
         "id": "d34d37a5-566a-4500-8fd9-8421ae31457a",
-        "is_default": true
+        "is_default": false
     },
     {
         "name": "project",
@@ -19,7 +19,7 @@
         "username": "postgres",
         "password": "Geethuhyma@2902",
         "id": "1bd75199-9cbb-4236-9d0d-7936a6569fa3",
-        "is_default": true
+        "is_default": false
     },
     {
         "name": "insight",
@@ -30,6 +30,23 @@
         "username": "postgres",
         "password": "Geethuhyma@2902",
         "id": "f977b724-7fab-485b-8078-363f27b5da5a",
+        "is_default": true
+    },
+    {
+        "name": "shipments",
+        "type": "elasticsearch",
+        "host": "my-elasticsearch-project-b914da.es.asia-south1.gcp.elastic.cloud",
+        "port": 443,
+        "database": "shipments",
+        "username": "",
+        "password": "",
+        "account": null,
+        "warehouse": null,
+        "schema_name": null,
+        "role": null,
+        "api_key": "V3VCRFJKNEJEWlE3STh0bm43WEU6MFhURmZkcGtDM3QwNHFjSGxnM0RCdw==",
+        "cloud_id": "",
+        "id": "b35b94c6-e7af-4374-920b-5b146ee0c862",
         "is_default": true
     }
 ]

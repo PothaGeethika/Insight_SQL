@@ -45,7 +45,7 @@ export default function RootLayout({
           enableColorScheme={false}
           disableTransitionOnChange
         >
-          <TooltipProvider delayDuration={200}>
+          <TooltipProvider delay={200}>
             {children}
           </TooltipProvider>
         </ThemeProvider>

@@ -32,6 +32,22 @@ class DatabaseManager:
                         current_table = table_name
                     schema_info += f"  - {column_name} ({data_type})\n"
             
+            elif self.engine.name == 'mysql':
+                query = text("""
+                    SELECT table_name, column_name, data_type
+                    FROM information_schema.columns
+                    WHERE table_schema = DATABASE()
+                    ORDER BY table_name, ordinal_position;
+                """)
+                result = connection.execute(query)
+                current_table = ""
+                for row in result:
+                    table_name, column_name, data_type = row
+                    if table_name != current_table:
+                        schema_info += f"\nTable: {table_name}\n"
+                        current_table = table_name
+                    schema_info += f"  - {column_name} ({data_type})\n"
+            
             elif self.engine.name == 'sqlite':
                 # Get all tables
                 tables_query = text("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';")

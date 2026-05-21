@@ -30,6 +30,41 @@ class SQLAgent:
         SQL Query:
         """)
 
+        self.mysql_prompt = ChatPromptTemplate.from_template("""
+        You are an expert MySQL developer. Given the database schema below, convert the user's natural language question into a valid MySQL query.
+        
+        Schema:
+        {schema}
+        
+        Question: {question}
+        
+        Rules:
+        1. Only return the SQL query. Do not include any explanations or markdown blocks like ```sql.
+        2. Ensure the query is compatible with MySQL.
+        3. Use table aliases for clarity if joining multiple tables.
+        
+        MySQL Query:
+        """)
+
+        self.snowflake_prompt = ChatPromptTemplate.from_template("""
+        You are an expert Snowflake SQL developer. Given the database schema below, convert the user's natural language question into a valid Snowflake SQL query.
+        
+        Database Type: snowflake
+        
+        Schema:
+        {schema}
+        
+        Question: {question}
+        
+        Rules:
+        1. Only return the SQL query. Do not include any explanations or markdown blocks like ```sql.
+        2. Ensure the query uses valid Snowflake SQL syntax (e.g., ILIKE instead of ILIKE, LIMIT is supported, use QUALIFY for window function filtering).
+        3. Use fully qualified table names if needed (DATABASE.SCHEMA.TABLE).
+        4. Use table aliases for clarity if joining multiple tables.
+        
+        Snowflake SQL Query:
+        """)
+
         self.mql_prompt = ChatPromptTemplate.from_template("""
         You are an expert MongoDB developer. Given the database schema (collections and sample fields) below, convert the user's natural language question into a valid MongoDB Query (MQL) in JSON format.
         
@@ -54,7 +89,61 @@ class SQLAgent:
         
         MQL JSON:
         """)
+
+        self.elasticsearch_prompt = ChatPromptTemplate.from_template("""
+        You are an expert Elasticsearch developer. Given the database schema (indices and their properties/fields) below, convert the user's natural language question into a valid Elasticsearch Query DSL in JSON format.
+        
+        Schema:
+        {schema}
+        
+        Question: {question}
+        
+        Rules:
+        1. Return ONLY a JSON object representing the search query body or index search wrapper.
+        2. The JSON must follow this structure:
+           {{
+               "index": "name_of_index",
+               "body": {{
+                   "query": {{ ... }},
+                   "_source": [ "field1", "field2" ], (optional projection)
+                   "size": 100
+               }}
+           }}
+        3. Do not include any explanations or markdown blocks.
+        4. For nested/object fields, always query the fully qualified dot-notation field name (e.g., use 'destination.city' or 'customer.name' instead of just 'destination' or 'customer').
+        5. Use "match" query (instead of "term" query) for text fields (like 'destination.city', names, descriptions) since "term" query does not analyze the search term and will fail to match due to casing (e.g., matching "Dubai" vs "dubai"). Use "term" or "terms" queries only for exact keywords, status fields, or ID fields.
+        
+        Elasticsearch DSL JSON:
+        """)
         self.parser = StrOutputParser()
+        
+        self.synthesize_prompt = ChatPromptTemplate.from_template("""
+        You are a helpful and expert data assistant. 
+        Given the user's original question and the structured query results returned from the database, synthesize a clear, friendly, and complete natural language response.
+        
+        User's Question: {question}
+        
+        Query Results (Headers): {headers}
+        Query Results (Rows): {rows}
+        
+        Instructions:
+        1. Base your answer directly on the provided Query Results. If the results are empty, state that no matching records were found.
+        2. Format your response clearly. Always output each matching record using clear, clean bullet points (not a raw dump of all JSON fields, and not a massive paragraph).
+           Example format:
+           Found X shipment(s) matching your criteria:
+           
+           - **Shipment ID:** SHIP-10001
+             - **Status:** In Transit
+             - **Origin:** Mumbai
+             - **Destination:** Dubai
+             - **Customer:** Acme Manufacturing Ltd
+             
+        3. Do NOT restrict or truncate the number of records returned to a small lines size like 10 or 20 lines. List ALL matching records returned from the query completely.
+        4. Focus on key, high-level attributes (e.g., ID, Status, Origin, Destination, Customer name/details) rather than nesting every single subfield (such as item arrays or coordinates) unless specifically asked.
+        5. Do not mention technical implementation details like SQL, MQL, or Elasticsearch syntax.
+        
+        Assistant Response:
+        """)
 
     def get_llm(self, provider, model_name=None):
         if provider == "gemini":
@@ -95,6 +184,12 @@ class SQLAgent:
         
         if db_type == "mongodb":
             chain = self.mql_prompt | llm | self.parser
+        elif db_type == "snowflake":
+            chain = self.snowflake_prompt | llm | self.parser
+        elif db_type == "mysql":
+            chain = self.mysql_prompt | llm | self.parser
+        elif db_type == "elasticsearch":
+            chain = self.elasticsearch_prompt | llm | self.parser
         else:
             chain = self.sql_prompt | llm | self.parser
         
@@ -163,3 +258,25 @@ class SQLAgent:
             "response": response_text
         })
         return title.strip().strip('"').strip("'")
+
+    def synthesize_answer(self, question, headers, rows, provider="gemini", model_name=None):
+        """Synthesizes a natural language answer based on query results."""
+        import json
+        try:
+            llm = self.get_llm(provider, model_name)
+            chain = self.synthesize_prompt | llm | self.parser
+            
+            # Format row data safely for the LLM to read
+            # Truncate row count if it is huge (e.g. keep first 30 rows for synthesis) to save tokens
+            truncated_rows = rows[:30]
+            
+            response = chain.invoke({
+                "question": question,
+                "headers": json.dumps(headers),
+                "rows": json.dumps(truncated_rows)
+            })
+            return response.strip()
+        except Exception as e:
+            # Fallback to default message if synthesis fails
+            print(f"Error synthesizing answer: {e}")
+            return None

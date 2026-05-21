@@ -64,6 +64,12 @@ def init_components():
             if default_conn.type == "mongodb":
                 from mongo_database import MongoDatabaseManager
                 db_manager = MongoDatabaseManager(db_url)
+            elif default_conn.type == "snowflake":
+                from snowflake_database import SnowflakeDatabaseManager
+                db_manager = SnowflakeDatabaseManager(db_url)
+            elif default_conn.type == "elasticsearch":
+                from elasticsearch_database import ElasticsearchDatabaseManager
+                db_manager = ElasticsearchDatabaseManager(db_url)
             else:
                 from database import DatabaseManager
                 db_manager = DatabaseManager(db_url)
@@ -74,6 +80,12 @@ def init_components():
                 if "mongodb" in db_url:
                     from mongo_database import MongoDatabaseManager
                     db_manager = MongoDatabaseManager(db_url)
+                elif "snowflake" in db_url:
+                    from snowflake_database import SnowflakeDatabaseManager
+                    db_manager = SnowflakeDatabaseManager(db_url)
+                elif "elasticsearch" in db_url:
+                    from elasticsearch_database import ElasticsearchDatabaseManager
+                    db_manager = ElasticsearchDatabaseManager(db_url)
                 else:
                     from database import DatabaseManager
                     db_manager = DatabaseManager(db_url)
@@ -93,7 +105,10 @@ def test_database_connection(request: ConnectionRequest):
         cm = ConnectionManager()
         
         # Validate required fields for non-sqlite
-        if request.type not in ["sqlite", "mongodb"] and (not request.host or not request.database):
+        if request.type == "snowflake":
+            if not request.account or not request.database:
+                return {"status": "error", "message": "Account Identifier and Database name are required for Snowflake."}
+        elif request.type not in ["sqlite", "mongodb"] and (not request.host or not request.database):
             return {"status": "error", "message": "Host and Database name are required for this database type."}
 
         # Create a temporary connection object
@@ -105,6 +120,19 @@ def test_database_connection(request: ConnectionRequest):
             client = MongoClient(db_url, serverSelectionTimeoutMS=5000)
             client.admin.command('ping')
             return {"status": "success", "message": "Connection successful! MongoDB is reachable."}
+        elif request.type == "snowflake":
+            from sqlalchemy import create_engine, text
+            engine = create_engine(db_url)
+            with engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+            return {"status": "success", "message": "Connection successful! Snowflake is reachable."}
+        elif request.type == "elasticsearch":
+            from elasticsearch_database import ElasticsearchDatabaseManager
+            es_mgr = ElasticsearchDatabaseManager(db_url)
+            if es_mgr.client.ping():
+                return {"status": "success", "message": "Connection successful! Elasticsearch is reachable."}
+            else:
+                raise Exception("Elasticsearch ping failed.")
         else:
             # SQL connection test
             from sqlalchemy import create_engine, text
@@ -206,6 +234,12 @@ def ask_question(request: QueryRequest):
                 if db_type == "mongodb":
                     from mongo_database import MongoDatabaseManager
                     temp_manager = MongoDatabaseManager(db_url)
+                elif db_type == "snowflake":
+                    from snowflake_database import SnowflakeDatabaseManager
+                    temp_manager = SnowflakeDatabaseManager(db_url)
+                elif db_type == "elasticsearch":
+                    from elasticsearch_database import ElasticsearchDatabaseManager
+                    temp_manager = ElasticsearchDatabaseManager(db_url)
                 else:
                     from database import DatabaseManager
                     temp_manager = DatabaseManager(db_url)
@@ -221,16 +255,20 @@ def ask_question(request: QueryRequest):
                     provider=request.provider,
                     model_name=request.model
                 )
+                print(f"Generated {db_type.upper()} query:\n{generated_query}\n")
                 
                 if not generated_query.strip() or "NOT_APPLICABLE" in generated_query:
                     continue
                     
                 # Execute query
                 headers, rows = temp_manager.execute_query(generated_query)
+                print(f"Query returned {len(rows)} rows with headers: {headers}")
                 success_results.append((headers, rows, conn.name))
                 
                 if db_type == "mongodb":
                     mql_details.append(f"-- {conn.name} (MongoDB):\n{generated_query}")
+                elif db_type == "elasticsearch":
+                    mql_details.append(f"-- {conn.name} (Elasticsearch DSL):\n{generated_query}")
                 else:
                     query_details.append(f"-- {conn.name} ({db_type.upper()}):\n{generated_query}")
                     
@@ -273,7 +311,24 @@ def ask_question(request: QueryRequest):
         
         # 4. Determine content message
         db_names_str = ", ".join([r[2] for r in success_results])
-        content_msg = f"I've generated and executed queries across database(s): {db_names_str} to answer your question: '{request.question}'"
+        content_msg = None
+        if success_results:
+            content_msg = sql_agent.synthesize_answer(
+                request.question,
+                combined_headers,
+                combined_rows,
+                provider=request.provider,
+                model_name=request.model
+            )
+        if not content_msg:
+            content_msg = f"I've generated and executed queries across database(s): {db_names_str} to answer your question: '{request.question}'"
+
+        # Determine query type and generated query
+        primary_db_type = "postgresql"
+        if selected_connection_ids:
+            conn = connection_manager.get_connection(selected_connection_ids[0])
+            if conn:
+                primary_db_type = conn.type
 
         return {
             "id": os.urandom(8).hex(),
@@ -281,6 +336,8 @@ def ask_question(request: QueryRequest):
             "content": content_msg,
             "sql": combined_sql,
             "mql": combined_mql,
+            "generated_query": combined_sql or combined_mql or "",
+            "query_type": primary_db_type,
             "timestamp": timestamp,
             "tableData": {
                 "headers": combined_headers,
@@ -309,6 +366,12 @@ def suggest_questions(request: SuggestionRequest):
         if conn.type == "mongodb":
             from mongo_database import MongoDatabaseManager
             current_db_manager = MongoDatabaseManager(db_url)
+        elif conn.type == "snowflake":
+            from snowflake_database import SnowflakeDatabaseManager
+            current_db_manager = SnowflakeDatabaseManager(db_url)
+        elif conn.type == "elasticsearch":
+            from elasticsearch_database import ElasticsearchDatabaseManager
+            current_db_manager = ElasticsearchDatabaseManager(db_url)
         else:
             from database import DatabaseManager
             current_db_manager = DatabaseManager(db_url)
