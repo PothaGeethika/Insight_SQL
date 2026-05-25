@@ -1,16 +1,5 @@
 [
     {
-        "name": "Demo",
-        "type": "postgresql",
-        "host": "localhost",
-        "port": 5432,
-        "database": "insightsql_db",
-        "username": "postgres",
-        "password": "Geethuhyma@2902",
-        "id": "d34d37a5-566a-4500-8fd9-8421ae31457a",
-        "is_default": false
-    },
-    {
         "name": "project",
         "type": "postgresql",
         "host": "localhost",
@@ -18,8 +7,14 @@
         "database": "insightsql_db",
         "username": "postgres",
         "password": "Geethuhyma@2902",
+        "account": null,
+        "warehouse": null,
+        "schema_name": null,
+        "role": null,
+        "api_key": null,
+        "cloud_id": null,
         "id": "1bd75199-9cbb-4236-9d0d-7936a6569fa3",
-        "is_default": false
+        "is_default": true
     },
     {
         "name": "insight",

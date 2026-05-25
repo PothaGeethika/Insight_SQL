@@ -1,7 +1,11 @@
 import os
 import json
+import time
 from pymongo import MongoClient
 from bson import json_util
+from logger_config import get_logger
+
+log = get_logger("mongo")
 try:
     PYMONGO_AVAILABLE = True
 except ImportError:
@@ -9,16 +13,21 @@ except ImportError:
 
 class MongoDatabaseManager:
     def __init__(self, connection_url):
+        log.info("[MONGO] Initialising MongoDatabaseManager")
         if not PYMONGO_AVAILABLE:
+            log.error("[MONGO] pymongo is not installed.")
             raise ImportError("pymongo is not installed. Please run 'pip install pymongo'")
         self.connection_url = connection_url
+        log.debug("[MONGO] Creating MongoClient...")
         self.client = MongoClient(self.connection_url)
         # Extract database name from connection URL
         self.db_name = self.connection_url.split('/')[-1].split('?')[0]
         self.db = self.client[self.db_name]
+        log.info("[MONGO] Connected to database: '%s'", self.db_name)
 
     def get_schema(self):
         """Returns the schema of the MongoDB database by listing collections and sample keys."""
+        log.info("[MONGO] Fetching schema for database: '%s'", self.db_name)
         if not PYMONGO_AVAILABLE:
              return "Error: pymongo library not installed."
              
@@ -27,8 +36,10 @@ class MongoDatabaseManager:
         try:
             collections = self.db.list_collection_names()
             if not collections:
+                log.warning("[MONGO] No collections found in database.")
                 return "No collections found in this database."
                 
+            log.debug("[MONGO] Found %d collection(s). Extracting sample docs.", len(collections))
             for coll_name in collections:
                 schema_info += f"\nCollection: {coll_name}\n"
                 sample_doc = self.db[coll_name].find_one()
@@ -40,17 +51,21 @@ class MongoDatabaseManager:
                 else:
                     schema_info += "  (Empty collection)\n"
                     
+            log.info("[MONGO] Schema fetched successfully (%d chars).", len(schema_info))
             return schema_info
         except Exception as e:
+            log.error("[MONGO] Error fetching schema: %s", e, exc_info=True)
             return f"Error fetching MongoDB schema: {str(e)}"
 
     def execute_query(self, mql_json):
+        log.info("[MONGO] Executing MQL query")
         if not PYMONGO_AVAILABLE:
             raise ImportError("pymongo is not installed.")
             
         try:
             if isinstance(mql_json, str):
                 mql_json = mql_json.strip().replace("```json", "").replace("```", "").strip()
+                log.debug("[MONGO] Raw MQL JSON:\n%s", mql_json)
                 mql_json = json.loads(mql_json)
             
             collection_name = mql_json.get("collection")
@@ -62,8 +77,10 @@ class MongoDatabaseManager:
             if not collection_name:
                 raise ValueError("Collection name is required in MQL JSON.")
                 
+            log.info("[MONGO] Action: '%s', Collection: '%s', Limit: %s", action, collection_name, limit)
             collection = self.db[collection_name]
             
+            t0 = time.perf_counter()
             if action == "find":
                 cursor = collection.find(query, projection).limit(limit)
                 results = list(cursor)
@@ -76,7 +93,9 @@ class MongoDatabaseManager:
                 results = [{"count": count}]
             else:
                 raise ValueError(f"Unsupported MongoDB action: {action}")
+            elapsed = time.perf_counter() - t0
                 
+            log.info("[MONGO] Execution completed in %.3fs – returned %d doc(s).", elapsed, len(results))
             if not results:
                 return [], []
                 

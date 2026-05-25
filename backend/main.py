@@ -3,12 +3,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import os
 import sys
+import time
 from pathlib import Path
 from dotenv import load_dotenv
 from models import QueryRequest, ConnectionRequest, DatabaseConnection
 from typing import List, Optional
 from agent import SQLAgent
 from connection_manager import ConnectionManager
+from logger_config import get_logger
+
+log = get_logger("main")
 
 class SuggestionRequest(BaseModel):
     history: List[dict] = []
@@ -20,6 +24,7 @@ class SuggestionRequest(BaseModel):
 load_dotenv()
 
 app = FastAPI(title="InsightSQL API")
+log.info("[STARTUP] InsightSQL FastAPI application initialising...")
 
 # Add CORS middleware
 app.add_middleware(
@@ -29,6 +34,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+log.info("[STARTUP] CORS middleware registered (allow_origins=*).")
 
 # Add the current directory to sys.path
 current_dir = str(Path(__file__).parent.resolve())
@@ -42,23 +48,30 @@ connection_manager = None
 
 def init_components():
     global db_manager, sql_agent, connection_manager
-    
-    # Initialize Connection Manager (Always needed)
-    try:
-        connection_manager = ConnectionManager()
-    except Exception as e:
-        print(f"Error initializing ConnectionManager: {e}")
 
-    # Initialize SQL Agent (Always needed)
+    log.info("[STARTUP] ── Initialising backend components ──────────────")
+
+    # Initialize Connection Manager
     try:
-        sql_agent = SQLAgent()
+        log.info("[STARTUP] Loading ConnectionManager...")
+        connection_manager = ConnectionManager()
+        log.info("[STARTUP] ConnectionManager ready.")
     except Exception as e:
-        print(f"Error initializing SQLAgent: {e}")
-    
+        log.error("[STARTUP] Failed to initialise ConnectionManager: %s", e, exc_info=True)
+
+    # Initialize SQL Agent
+    try:
+        log.info("[STARTUP] Loading SQLAgent (LangChain prompts)...")
+        sql_agent = SQLAgent()
+        log.info("[STARTUP] SQLAgent ready.")
+    except Exception as e:
+        log.error("[STARTUP] Failed to initialise SQLAgent: %s", e, exc_info=True)
+
     # Initialize default db_manager if a default connection exists
     try:
         default_conn = connection_manager.get_default_connection() if connection_manager else None
         if default_conn:
+            log.info("[STARTUP] Default connection found: name='%s'  type='%s'", default_conn.name, default_conn.type)
             db_url = connection_manager.format_connection_url(default_conn)
             if default_conn.type == "mongodb":
                 from mongo_database import MongoDatabaseManager
@@ -75,8 +88,9 @@ def init_components():
             else:
                 from database import DatabaseManager
                 db_manager = DatabaseManager(db_url)
+            log.info("[STARTUP] Default db_manager initialised for type='%s'.", default_conn.type)
         else:
-            # Fallback to .env if no connections saved yet
+            log.info("[STARTUP] No default connection found – trying DATABASE_URL from .env...")
             db_url = os.getenv("DATABASE_URL")
             if db_url:
                 if "mongodb" in db_url:
@@ -94,17 +108,27 @@ def init_components():
                 else:
                     from database import DatabaseManager
                     db_manager = DatabaseManager(db_url)
+                log.info("[STARTUP] db_manager initialised from DATABASE_URL env var.")
+            else:
+                log.warning("[STARTUP] No DATABASE_URL in .env and no default connection – db_manager not initialised.")
     except Exception as e:
-        print(f"Warning: Default database manager not initialized: {e}")
+        log.error("[STARTUP] Failed to initialise default db_manager: %s", e, exc_info=True)
+
+    log.info("[STARTUP] ── All components initialised. Server ready. ──────")
 
 init_components()
 
 @app.get("/databases")
 def get_databases():
-    return connection_manager.list_connections()
+    log.info("[API] GET /databases")
+    connections = connection_manager.list_connections()
+    log.info("[API] Returning %d database connection(s).", len(connections))
+    return connections
 
 @app.post("/databases/test")
 def test_database_connection(request: ConnectionRequest):
+    log.info("[API] POST /databases/test  type='%s'  host='%s'  db='%s'",
+             request.type, request.host, request.database)
     try:
         from connection_manager import ConnectionManager
         cm = ConnectionManager()
@@ -124,12 +148,14 @@ def test_database_connection(request: ConnectionRequest):
             from pymongo import MongoClient
             client = MongoClient(db_url, serverSelectionTimeoutMS=5000)
             client.admin.command('ping')
+            log.info("[API] /databases/test SUCCESS for type='%s'", request.type)
             return {"status": "success", "message": "Connection successful! MongoDB is reachable."}
         elif request.type == "snowflake":
             from sqlalchemy import create_engine, text
             engine = create_engine(db_url)
             with engine.connect() as conn:
                 conn.execute(text("SELECT 1"))
+            log.info("[API] /databases/test SUCCESS for type='%s'", request.type)
             return {"status": "success", "message": "Connection successful! Snowflake is reachable."}
         elif request.type == "elasticsearch":
             from elasticsearch_database import ElasticsearchDatabaseManager
@@ -149,27 +175,32 @@ def test_database_connection(request: ConnectionRequest):
         else:
             # SQL connection test
             from sqlalchemy import create_engine, text
-            from sqlalchemy.exc import OperationalError, ProgrammingError
-            
             engine = create_engine(db_url, connect_args={'connect_timeout': 5})
             with engine.connect() as conn:
                 conn.execute(text("SELECT 1"))
+            log.info("[API] /databases/test SUCCESS for type='%s'", request.type)
             return {"status": "success", "message": "Connection successful! Database is reachable."}
-    
+
     except Exception as e:
+        log.error("[API] /databases/test FAILED for type='%s': %s", request.type, e)
         return {"status": "error", "message": f"Connection Failed: {str(e)}"}
 
 @app.post("/databases")
 def add_database(request: ConnectionRequest):
+    log.info("[API] POST /databases  name='%s'  type='%s'", request.name, request.type)
     try:
         conn = connection_manager.add_connection(request.dict())
+        log.info("[API] Database added successfully – id='%s'", conn.id)
         return conn
     except Exception as e:
+        log.error("[API] Failed to add database: %s", e, exc_info=True)
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.delete("/databases/{conn_id}")
 def delete_database(conn_id: str):
+    log.info("[API] DELETE /databases/%s", conn_id)
     connection_manager.delete_connection(conn_id)
+    log.info("[API] Connection '%s' deleted.", conn_id)
     return {"status": "deleted"}
 
 @app.put("/databases/{conn_id}")
@@ -209,9 +240,13 @@ def set_default_database(conn_id: str):
 
 @app.post("/ask")
 def ask_question(request: QueryRequest):
-    print(f"Received question: {request.question} for connection: {request.connection_id}")
+    t_start = time.perf_counter()
+    log.info("[API] ════ POST /ask ════════════════════════════════════════")
+    log.info("[API] Question  : %s", request.question)
+    log.info("[API] Provider  : %s  Model: %s", request.provider, request.model)
+    log.info("[API] Connection IDs: %s", request.connection_ids or request.connection_id)
     global db_manager
-    
+
     try:
         # 1. Extract connection IDs
         selected_connection_ids = []
@@ -219,15 +254,18 @@ def ask_question(request: QueryRequest):
             selected_connection_ids = request.connection_ids
         elif request.connection_id:
             selected_connection_ids = [cid.strip() for cid in request.connection_id.split(",") if cid.strip()]
-            
+
         if not selected_connection_ids:
-            # Fallback to default if no connection specified
+            log.info("[API] No connection specified – falling back to default.")
             default_conn = connection_manager.get_default_connection() if connection_manager else None
             if default_conn:
                 selected_connection_ids = [default_conn.id]
 
         if not selected_connection_ids:
+            log.error("[API] No database connection available – aborting.")
             raise HTTPException(status_code=500, detail="No database connected. Please select or add a database first.")
+
+        log.info("[API] Querying %d database(s): %s", len(selected_connection_ids), selected_connection_ids)
 
         success_results = []
         query_details = []
@@ -261,24 +299,28 @@ def ask_question(request: QueryRequest):
                     temp_manager = DatabaseManager(db_url)
                     
                 # Get schema
+                log.info("[API] [%s] Fetching schema for connection '%s'...", db_type.upper(), conn.name)
                 schema = temp_manager.get_schema()
-                
+
                 # Generate query
+                log.info("[API] [%s] Sending question to LLM for query generation...", db_type.upper())
                 generated_query = sql_agent.generate_query(
-                    request.question, 
-                    schema, 
+                    request.question,
+                    schema,
                     db_type=db_type,
                     provider=request.provider,
                     model_name=request.model
                 )
-                print(f"Generated {db_type.upper()} query:\n{generated_query}\n")
-                
+                log.info("[API] [%s] Generated query:\n%s", db_type.upper(), generated_query)
+
                 if not generated_query.strip() or "NOT_APPLICABLE" in generated_query:
+                    log.warning("[API] [%s] Query marked NOT_APPLICABLE or empty – skipping.", db_type.upper())
                     continue
-                    
+
                 # Execute query
+                log.info("[API] [%s] Executing generated query...", db_type.upper())
                 headers, rows = temp_manager.execute_query(generated_query)
-                print(f"Query returned {len(rows)} rows with headers: {headers}")
+                log.info("[API] [%s] Execution returned %d row(s) with headers: %s", db_type.upper(), len(rows), headers)
                 success_results.append((headers, rows, conn.name))
                 
                 if db_type == "mongodb":
@@ -291,12 +333,14 @@ def ask_question(request: QueryRequest):
                     query_details.append(f"-- {conn.name} ({db_type.upper()}):\n{generated_query}")
                     
             except Exception as e:
-                # Log error and continue to query other databases
-                print(f"Error querying database {conn.name} ({conn_id}): {e}")
+                log.error("[API] Error querying database '%s' (id=%s): %s", conn.name, conn_id, e, exc_info=True)
                 continue
 
         if not success_results:
+            log.error("[API] All %d database(s) failed or returned no valid results.", len(selected_connection_ids))
             raise HTTPException(status_code=500, detail="No query returned valid results from any of the selected databases.")
+
+        log.info("[API] %d/%d database(s) returned results.", len(success_results), len(selected_connection_ids))
 
         # 3. Combine results using outer union logic
         all_headers = []
@@ -327,10 +371,11 @@ def ask_question(request: QueryRequest):
         from datetime import datetime
         timestamp = datetime.now().strftime("%I:%M %p")
         
-        # 4. Determine content message
+        # 4. Synthesize answer
         db_names_str = ", ".join([r[2] for r in success_results])
         content_msg = None
         if success_results:
+            log.info("[API] Synthesising natural language answer...")
             content_msg = sql_agent.synthesize_answer(
                 request.question,
                 combined_headers,
@@ -341,12 +386,17 @@ def ask_question(request: QueryRequest):
         if not content_msg:
             content_msg = f"I've generated and executed queries across database(s): {db_names_str} to answer your question: '{request.question}'"
 
-        # Determine query type and generated query
+        # Determine primary db type
         primary_db_type = "postgresql"
         if selected_connection_ids:
             conn = connection_manager.get_connection(selected_connection_ids[0])
             if conn:
                 primary_db_type = conn.type
+
+        elapsed_total = time.perf_counter() - t_start
+        log.info("[API] /ask completed in %.2fs – combined %d row(s) × %d col(s).",
+                 elapsed_total, len(combined_rows), len(combined_headers))
+        log.info("[API] ════ END /ask ════════════════════════════════════════")
 
         return {
             "id": os.urandom(8).hex(),
@@ -366,11 +416,12 @@ def ask_question(request: QueryRequest):
         raise
     except Exception as e:
         import traceback
-        print(traceback.format_exc())
+        log.error("[API] Unexpected error in /ask: %s\n%s", e, traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
 @app.post("/suggest")
 def suggest_questions(request: SuggestionRequest):
+    log.info("[API] POST /suggest  connection_id='%s'", request.connection_id)
     global db_manager
     current_db_manager = db_manager
     conn = None
@@ -381,6 +432,7 @@ def suggest_questions(request: SuggestionRequest):
 
     if conn:
         db_url = connection_manager.format_connection_url(conn)
+        log.debug("[API] /suggest using connection type='%s'", conn.type)
         if conn.type == "mongodb":
             from mongo_database import MongoDatabaseManager
             current_db_manager = MongoDatabaseManager(db_url)
@@ -396,28 +448,28 @@ def suggest_questions(request: SuggestionRequest):
         else:
             from database import DatabaseManager
             current_db_manager = DatabaseManager(db_url)
-    
+
     if not current_db_manager or not sql_agent:
-        return [] # Silent fail for suggestions
-    
+        log.warning("[API] /suggest: db_manager or sql_agent not ready – returning empty list.")
+        return []
+
     try:
         schema = current_db_manager.get_schema()
-        # Format history for the prompt
         history_text = ""
-        for msg in request.history[-5:]: # Last 5 messages for context
+        for msg in request.history[-5:]:
             role = "User" if msg.get("role") == "user" else "Assistant"
             content = msg.get("content", "")
             history_text += f"{role}: {content}\n"
-            
         suggestions = sql_agent.generate_suggestions(
-            history_text, 
+            history_text,
             schema,
             provider=request.provider,
             model_name=request.model
         )
+        log.info("[API] /suggest returning %d suggestions.", len(suggestions))
         return suggestions
     except Exception as e:
-        print(f"Suggestion generation error: {e}")
+        log.error("[API] /suggest error: %s", e, exc_info=True)
         return []
 
 @app.post("/summarize")
@@ -426,19 +478,23 @@ def summarize_chat(request: dict):
     response_text = request.get("response")
     provider = request.get("provider", "gemini")
     model = request.get("model", "gemini-2.0-flash")
-    
+    log.info("[API] POST /summarize  provider='%s'", provider)
+
     if not question or not response_text or not sql_agent:
+        log.warning("[API] /summarize: missing fields or sql_agent not ready.")
         return {"title": "New Chat"}
-    
+
     try:
         title = sql_agent.summarize_conversation(question, response_text, provider, model)
+        log.info("[API] /summarize title='%s'", title)
         return {"title": title}
     except Exception as e:
-        print(f"Summarization error: {e}")
+        log.error("[API] /summarize error: %s", e, exc_info=True)
         return {"title": question[:30] + "..." if len(question) > 30 else question}
 
 @app.get("/health")
 def health_check():
+    log.debug("[API] GET /health")
     return {"status": "healthy"}
 
 if __name__ == "__main__":

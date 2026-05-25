@@ -1,17 +1,22 @@
 import sqlite3
 import os
+from logger_config import get_logger
+
+log = get_logger("init_db")
 
 def init_db():
     db_path = "insight_sql.db"
+    log.info("[INIT_DB] Initialising SQLite database at %s", db_path)
     
     # Remove existing db if it exists
     if os.path.exists(db_path):
+        log.info("[INIT_DB] Removing existing database file.")
         os.remove(db_path)
     
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
     
-    # Create sample tables
+    log.info("[INIT_DB] Creating sample tables (customers, orders)...")
     cursor.execute("""
     CREATE TABLE customers (
         id INTEGER PRIMARY KEY,
@@ -33,6 +38,7 @@ def init_db():
     """)
     
     # Insert sample data
+    log.info("[INIT_DB] Inserting sample data into tables...")
     customers = [
         (1, 'Alice Johnson', 'alice@example.com', 'New York'),
         (2, 'Bob Smith', 'bob@example.com', 'San Francisco'),
@@ -53,8 +59,8 @@ def init_db():
     
     conn.commit()
     conn.close()
-    print(f"Sample database created at: {os.path.abspath(db_path)}")
-    print("Update your .env to: DATABASE_URL=sqlite:///insight_sql.db")
+    log.info("[INIT_DB] Sample database created successfully at: %s", os.path.abspath(db_path))
+    log.info("[INIT_DB] Update your .env to: DATABASE_URL=sqlite:///insight_sql.db")
 
 if __name__ == "__main__":
     init_db()

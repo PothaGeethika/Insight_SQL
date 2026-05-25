@@ -1,6 +1,9 @@
 import psycopg2
 from dotenv import load_dotenv
 import os
+from logger_config import get_logger
+
+log = get_logger("setup_db")
 
 load_dotenv()
 
@@ -22,8 +25,10 @@ def setup_database():
         cursor.execute(f"SELECT 1 FROM pg_catalog.pg_database WHERE datname = '{db_name}'")
         exists = cursor.fetchone()
         if not exists:
-            print(f"Creating database {db_name}...")
+            log.info("[SETUP] Creating database %s...", db_name)
             cursor.execute(f"CREATE DATABASE {db_name}")
+        else:
+            log.info("[SETUP] Database %s already exists.", db_name)
         
         cursor.close()
         conn.close()
@@ -37,7 +42,7 @@ def setup_database():
         )
         cursor = conn.cursor()
 
-        print("Creating tables...")
+        log.info("[SETUP] Creating tables (customers, products, orders)...")
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS customers (
                 id SERIAL PRIMARY KEY,
@@ -65,10 +70,11 @@ def setup_database():
             );
         """)
 
-        print("Filling with dummy data...")
+        log.info("[SETUP] Filling tables with dummy data...")
         # Check if data already exists to avoid duplicates
         cursor.execute("SELECT count(*) FROM customers")
-        if cursor.fetchone()[0] == 0:
+        count = cursor.fetchone()[0]
+        if count == 0:
             cursor.execute("""
                 INSERT INTO customers (name, email, city) VALUES
                 ('Amit Sharma', 'amit@email.com', 'Mumbai'),
@@ -94,14 +100,17 @@ def setup_database():
                 (2, 5, 2, 16000);
             """)
 
+        else:
+            log.info("[SETUP] Dummy data already exists (%d customers found).", count)
+
         conn.commit()
-        print("Database setup complete!")
+        log.info("[SETUP] Database setup complete!")
         cursor.close()
         conn.close()
 
     except Exception as e:
-        print(f"Error setting up database: {e}")
-        print("Make sure PostgreSQL is running and your .env credentials are correct.")
+        log.error("[SETUP] Error setting up database: %s", e, exc_info=True)
+        log.info("[SETUP] Make sure PostgreSQL is running and your .env credentials are correct.")
 
 if __name__ == "__main__":
     setup_database()

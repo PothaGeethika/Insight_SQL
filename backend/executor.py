@@ -1,5 +1,13 @@
+import time
+from logger_config import get_logger
+
+log = get_logger("executor")
+
 def execute_sql(conn, sql):
+    log.info("[EXECUTOR] Executing raw SQL query.")
+    log.debug("[EXECUTOR] SQL Query:\n%s", sql)
     try:
+        t0 = time.perf_counter()
         cursor = conn.cursor()
         cursor.execute(sql)
         
@@ -13,10 +21,15 @@ def execute_sql(conn, sql):
             for row in rows:
                 result.append(dict(zip(columns, row)))
             
+            elapsed = time.perf_counter() - t0
+            log.info("[EXECUTOR] Query execution returned %d row(s) in %.3fs.", len(result), elapsed)
             return {"success": True, "data": result}
         else:
             conn.commit()
+            elapsed = time.perf_counter() - t0
+            log.info("[EXECUTOR] Query executed successfully with no results (committed) in %.3fs.", elapsed)
             return {"success": True, "data": "Query executed successfully (no results to display)."}
     
     except Exception as e:
+        log.error("[EXECUTOR] Execution error: %s", e, exc_info=True)
         return {"success": False, "error": str(e)}

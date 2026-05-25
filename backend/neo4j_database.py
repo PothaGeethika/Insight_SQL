@@ -1,7 +1,11 @@
 import os
 import json
 import urllib.parse
+import time
 from neo4j import GraphDatabase
+from logger_config import get_logger
+
+log = get_logger("neo4j")
 
 try:
     NEO4J_AVAILABLE = True
@@ -12,7 +16,9 @@ class Neo4jDatabaseManager:
     """Database manager for Neo4j connections."""
 
     def __init__(self, connection_url: str):
+        log.info("[NEO4J] Initialising Neo4jDatabaseManager")
         if not NEO4J_AVAILABLE:
+            log.error("[NEO4J] neo4j is not installed.")
             raise ImportError("neo4j is not installed. Please run 'pip install neo4j'")
         
         self.connection_url = connection_url
@@ -29,15 +35,19 @@ class Neo4jDatabaseManager:
             
         uri = f"{scheme}://{host_netloc}"
         
+        log.debug("[NEO4J] Creating GraphDatabase driver...")
         self.driver = GraphDatabase.driver(uri, auth=(username, password))
+        log.info("[NEO4J] Driver created.")
 
     def get_schema(self) -> str:
         """Returns the schema (nodes and relationships) of the Neo4j database."""
+        log.info("[NEO4J] Fetching schema (nodes and relationships)...")
         if not NEO4J_AVAILABLE:
             return "Error: neo4j library not installed."
         
         schema_info = "Neo4j Database Schema:\n"
         try:
+            t0 = time.perf_counter()
             with self.driver.session() as session:
                 # Query to get Node labels and their properties
                 node_query = """
@@ -74,19 +84,26 @@ class Neo4jDatabaseManager:
                         for p in props:
                             schema_info += f"    - {p}\n"
                             
+            elapsed = time.perf_counter() - t0
             if schema_info.strip() == "Neo4j Database Schema:\n\nNodes:\n\nRelationships:":
+                log.warning("[NEO4J] No nodes or relationships found.")
                 return "No nodes or relationships found in this Neo4j database."
+            log.info("[NEO4J] Schema fetched in %.2fs", elapsed)
             return schema_info
         except Exception as e:
+            log.error("[NEO4J] Error fetching schema: %s", e, exc_info=True)
             return f"Error fetching Neo4j schema: {str(e)}"
 
     def execute_query(self, cypher_query: str):
         """Executes a Cypher query and returns (headers, rows)."""
+        log.info("[NEO4J] Executing Cypher query")
         if not NEO4J_AVAILABLE:
             raise ImportError("neo4j package not installed.")
             
         try:
             cypher_query = cypher_query.strip().replace("```cypher", "").replace("```", "").strip()
+            log.debug("[NEO4J] SQL/Cypher:\n%s", cypher_query)
+            t0 = time.perf_counter()
             with self.driver.session() as session:
                 result = session.run(cypher_query)
                 records = list(result)
@@ -119,6 +136,10 @@ class Neo4jDatabaseManager:
                                 row.append(str(val))
                     rows.append(row)
                 
+                elapsed = time.perf_counter() - t0
+                log.info("[NEO4J] Query completed in %.3fs – %d row(s), %d column(s).", elapsed, len(rows), len(headers))
                 return headers, rows
+                
         except Exception as e:
+            log.error("[NEO4J] Execution error: %s", e, exc_info=True)
             raise Exception(f"Neo4j execution error: {str(e)}")

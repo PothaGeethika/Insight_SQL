@@ -1,3 +1,8 @@
+import time
+from logger_config import get_logger
+
+log = get_logger("sql_gen")
+
 def generate_sql(question, schema, llm):
     prompt = f"""
     You are a PostgreSQL expert.
@@ -15,11 +20,20 @@ def generate_sql(question, schema, llm):
     Instead, use accurate methods or query the tables directly if possible.
     """
     
+    log.info("[SQL_GEN] Generating SQL for question: '%s'", question)
+    log.debug("[SQL_GEN] Provided schema length: %d chars", len(schema))
+    
+    t0 = time.perf_counter()
     response = llm.invoke(prompt)
+    elapsed = time.perf_counter() - t0
+    
     content = response.content
     if isinstance(content, list):
         # Join list if it's a list of content blocks
         content = "".join([c if isinstance(c, str) else str(c.get("text", "")) for c in content])
-        # print(content,"content-------")
-        # input(">>>>>>>>>>>>>>")    
-    return content.strip().replace("```sql", "").replace("```", "").strip()
+        
+    final_sql = content.strip().replace("```sql", "").replace("```", "").strip()
+    log.info("[SQL_GEN] SQL generation completed in %.2fs", elapsed)
+    log.debug("[SQL_GEN] Generated SQL:\n%s", final_sql)
+    
+    return final_sql

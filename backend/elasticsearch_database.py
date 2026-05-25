@@ -1,6 +1,10 @@
 import os
 import json
 import urllib.parse
+import time
+from logger_config import get_logger
+
+log = get_logger("elastic")
 
 try:
     from elasticsearch import Elasticsearch
@@ -12,11 +16,13 @@ class ElasticsearchDatabaseManager:
     """Database manager for Elasticsearch connections."""
 
     def __init__(self, connection_url: str):
+        log.info("[ELASTIC] Initialising ElasticsearchDatabaseManager")
         if not ES_AVAILABLE:
+            log.error("[ELASTIC] elasticsearch is not installed.")
             raise ImportError("elasticsearch is not installed. Please run 'pip install elasticsearch'")
-        
+
         self.connection_url = connection_url
-        
+
         import urllib.parse
         parsed = urllib.parse.urlparse(connection_url)
         query_params = urllib.parse.parse_qs(parsed.query)
@@ -67,10 +73,12 @@ class ElasticsearchDatabaseManager:
 
     def get_schema(self) -> str:
         """Returns the mapping schema of the index or all indices in Elasticsearch."""
+        log.info("[ELASTIC] Fetching schema for indices")
         if not ES_AVAILABLE:
             return "Error: elasticsearch library not installed."
-            
+
         try:
+            t0 = time.perf_counter()
             schema_info = ""
             if self.index_name:
                 indices = [self.index_name]
@@ -107,45 +115,45 @@ class ElasticsearchDatabaseManager:
                 except Exception as e:
                     schema_info += f"  (Error fetching mapping: {str(e)})\n"
                     
+            elapsed = time.perf_counter() - t0
+            log.info("[ELASTIC] Schema fetched in %.2fs", elapsed)
             return schema_info
         except Exception as e:
+            log.error("[ELASTIC] Error fetching schema: %s", e, exc_info=True)
             return f"Error fetching Elasticsearch schema: {str(e)}"
 
-    def execute_query(self, query_json):
-        """Executes an Elasticsearch query (JSON DSL query) and returns (headers, rows)."""
+    def execute_query(self, es_query_json: str):
+        log.info("[ELASTIC] Executing Elasticsearch query")
         if not ES_AVAILABLE:
             raise ImportError("elasticsearch package not installed.")
             
         try:
-            if isinstance(query_json, str):
-                query_json = query_json.strip().replace("```json", "").replace("```", "").strip()
-                query_json = json.loads(query_json)
-                
-            index = query_json.get("index", self.index_name)
-            body = query_json.get("body", query_json)
-            
-            # If body has 'index' wrapper, remove it
-            if "body" in query_json:
-                body = query_json["body"]
+            if isinstance(es_query_json, str):
+                es_query_json = es_query_json.strip().replace("```json", "").replace("```", "").strip()
+                log.debug("[ELASTIC] Raw DSL Query:\n%s", es_query_json)
+                es_query = json.loads(es_query_json)
             else:
-                # If the query itself was just the search body (e.g. {"query": {"match_all": {}}})
-                body = query_json
-                
+                es_query = es_query_json
+
+            index = es_query.get("index") or self.index_name
             if not index:
-                # Fallback to search all non-system indices if none specified
-                index = "_all"
-                
-            search_args = {"index": index, "body": body}
-            if "size" not in body:
-                search_args["size"] = 100
-            res = self.client.search(**search_args)
-            hits = res.get("hits", {}).get("hits", [])
+                raise ValueError("An 'index' must be specified in the query JSON if not provided in connection.")
+
+            log.info("[ELASTIC] Searching index='%s'", index)
+            if "index" in es_query:
+                del es_query["index"]
+
+            t0 = time.perf_counter()
+            result = self.client.search(index=index, body=es_query)
+            elapsed = time.perf_counter() - t0
+            
+            hits = result.get("hits", {}).get("hits", [])
             
             if not hits:
-                print(f"No hits returned from index {index}")
+                log.info("[ELASTIC] Search completed in %.3fs – returned 0 hits.", elapsed)
                 return [], []
-            else:
-                print(f"Found {len(hits)} hits in index {index}. First hit: {json.dumps(hits[0])}")
+            
+            log.info("[ELASTIC] Search completed in %.3fs – returned %d hit(s).", elapsed, len(hits))
                 
             def flatten_dict(d: dict, parent_key: str = '', sep: str = '.') -> dict:
                 items = []
@@ -157,12 +165,10 @@ class ElasticsearchDatabaseManager:
                         items.append((new_key, v))
                 return dict(items)
 
-            # Extract headers from the flattened source of hits
             headers = set()
             flat_sources = []
             for hit in hits:
                 source = hit.get("_source", {})
-                # If source is None or empty, fall back to empty dict
                 if not source:
                     source = {}
                 flat_source = flatten_dict(source)
@@ -170,7 +176,6 @@ class ElasticsearchDatabaseManager:
                 headers.update(flat_source.keys())
                 
             headers = sorted(list(headers))
-            # Insert metadata fields at the front
             headers.insert(0, "_id")
             headers.insert(1, "_score")
             
@@ -190,6 +195,29 @@ class ElasticsearchDatabaseManager:
                             row.append(str(val))
                 rows.append(row)
                 
+            if "aggregations" in result:
+                log.info("[ELASTIC] Processing aggregations.")
+                agg_data = result["aggregations"]
+                
+                def extract_aggs(aggs, prefix=""):
+                    rows = []
+                    for agg_name, agg_value in aggs.items():
+                        if "buckets" in agg_value:
+                            for bucket in agg_value["buckets"]:
+                                key = bucket.get("key_as_string", bucket.get("key"))
+                                doc_count = bucket.get("doc_count")
+                                rows.append([f"{prefix}{agg_name}:{key}", doc_count])
+                        elif "value" in agg_value:
+                            rows.append([f"{prefix}{agg_name}", agg_value["value"]])
+                    return rows
+
+                agg_rows = extract_aggs(agg_data)
+                if agg_rows:
+                    log.info("[ELASTIC] Found %d aggregation bucket(s).", len(agg_rows))
+                    return ["Aggregation_Key", "Value"], agg_rows
+
+            log.info("[ELASTIC] Query execution successful – %d row(s) matched.", len(rows))
             return headers, rows
         except Exception as e:
-            raise Exception(f"Elasticsearch execution error: {str(e)}")
+            log.error("[ELASTIC] Execution error: %s", e, exc_info=True)
+            raise Exception(f"Elasticsearch query error: {str(e)}")
