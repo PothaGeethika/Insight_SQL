@@ -148,25 +148,24 @@ class SQLAgent:
         
         Instructions:
         1. Base your answer directly on the provided Query Results. If the results are empty, state that no matching records were found.
-        2. Format your response clearly. Always output each matching record using clear, clean bullet points (not a raw dump of all JSON fields, and not a massive paragraph).
+        2. If the results contain 5 or fewer records, format your response clearly using clear, clean bullet points (not a raw dump of JSON fields).
            Example format:
            Found X shipment(s) matching your criteria:
            
            - **Shipment ID:** SHIP-10001
              - **Status:** In Transit
              - **Origin:** Mumbai
-             - **Destination:** Dubai
-             - **Customer:** Acme Manufacturing Ltd
              
-        3. Do NOT restrict or truncate the number of records returned to a small lines size like 10 or 20 lines. List ALL matching records returned from the query completely.
-        4. Focus on key, high-level attributes (e.g., ID, Status, Origin, Destination, Customer name/details) rather than nesting every single subfield (such as item arrays or coordinates) unless specifically asked.
-        5. Do not mention technical implementation details like SQL, MQL, or Elasticsearch syntax.
+        3. CRITICAL: If the results contain MORE than 5 records, or if the records appear to be full-table dumps or raw JSON data, DO NOT list out all the records. Instead, provide a brief 1-2 sentence summary (e.g., "I have fetched the complete table data.") and instruct the user to "expand the Results table below to view all the records."
+        4. Focus on key, high-level attributes rather than nesting every single subfield unless specifically asked.
+        5. When listing database schemas or data types, always simplify technical database types into common, user-friendly terms (e.g., use "String" instead of "character varying", "Date/Time" instead of "timestamp with time zone", "Number" instead of "integer").
+        6. Do not mention technical implementation details like SQL, MQL, or Elasticsearch syntax.
         
         Assistant Response:
         """)
 
-    def get_llm(self, provider, model_name=None):
-        log.debug("[LLM] Selecting provider='%s' model='%s'", provider, model_name)
+    def get_llm(self, provider, model_name=None, temperature=0):
+        log.debug("[LLM] Selecting provider='%s' model='%s' temp=%s", provider, model_name, temperature)
         if provider == "gemini":
             api_key = os.getenv("GEMINI_API_KEY")
             if not api_key:
@@ -175,7 +174,7 @@ class SQLAgent:
             return ChatGoogleGenerativeAI(
                 model=model_name or "gemini-2.0-flash",
                 google_api_key=api_key,
-                temperature=0
+                temperature=temperature
             )
         elif provider == "groq":
             api_key = os.getenv("GROQ_API_KEY")
@@ -185,7 +184,7 @@ class SQLAgent:
             return ChatGroq(
                 model=model_name or "llama-3.1-70b-versatile",
                 groq_api_key=api_key,
-                temperature=0
+                temperature=temperature
             )
         elif provider == "deepseek":
             api_key = os.getenv("DEEPSEEK_API_KEY")
@@ -196,7 +195,7 @@ class SQLAgent:
                 model=model_name or "deepseek-chat",
                 api_key=api_key,
                 base_url="https://api.deepseek.com/v1",
-                temperature=0
+                temperature=temperature
             )
         elif provider == "ollama":
             base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
@@ -204,7 +203,7 @@ class SQLAgent:
             return ChatOllama(
                 model=model_name or "llama3",
                 base_url=base_url,
-                temperature=0
+                temperature=temperature
             )
         else:
             log.error("[LLM] Unsupported provider requested: '%s'", provider)
@@ -217,7 +216,7 @@ class SQLAgent:
         log.info("[QUERY_GEN] User question: %s", question)
         log.debug("[QUERY_GEN] Schema passed to LLM (first 500 chars):\n%s", schema[:500])
 
-        llm = self.get_llm(provider, model_name)
+        llm = self.get_llm(provider, model_name, temperature=0)
 
         prompt_map = {
             "mongodb":       self.mql_prompt,
@@ -244,38 +243,85 @@ class SQLAgent:
         """Generates relevant follow-up questions based on history and schema."""
         log.info("[SUGGESTIONS] Generating follow-up suggestions – provider='%s'", provider)
         prompt = ChatPromptTemplate.from_template("""
-        You are a data analyst assistant. Based on the previous conversation history and the database schema provided, suggest 3-4 concise, highly relevant natural language questions the user might want to ask next.
+        You are a data analyst assistant. Based on the previous conversation history and the database schema provided, suggest 4 concise, highly relevant natural language questions the user might want to ask next.
+        Make the questions diverse and varied.
         
         Schema:
         {schema}
         
-        Recent History:
-        {history}
+        History:
+        {history_text}
         
         Rules:
-        1. Return ONLY the questions, one per line.
-        2. Do not include numbering, bullets, or any introductory text.
-        3. Each suggestion must be a direct question in plain English.
-        4. Focus on deep-diving into the data already discussed.
+        1. Output ONLY a valid JSON array of 4 strings (the questions).
+        2. Do not include any explanations or markdown formatting like ```json.
+        3. Example: ["How many users are there?", "What is the total revenue?", "Show the latest orders", "Which products sell the most?"]
+        
+        Output:
         """)
-        llm = self.get_llm(provider, model_name)
+        llm = self.get_llm(provider, model_name, temperature=0.7)
         chain = prompt | llm | self.parser
 
         t0 = time.perf_counter()
-        response = chain.invoke({"history": history_text, "schema": schema})
+        response = chain.invoke({"history_text": history_text, "schema": schema})
         elapsed = time.perf_counter() - t0
         log.debug("[SUGGESTIONS] LLM responded in %.2fs", elapsed)
 
-        # Split by newline and clean up
-        suggestions = [q.strip() for q in response.split("\n") if q.strip()]
-        # Remove common prefixes like "- ", "1. ", etc if they exist
-        cleaned = []
-        for s in suggestions:
-            s = s.lstrip("- ").lstrip("1. ").lstrip("2. ").lstrip("3. ").lstrip("4. ").strip()
-            if s: cleaned.append(s)
-        result = cleaned[:4]
-        log.info("[SUGGESTIONS] Returning %d suggestions: %s", len(result), result)
-        return result
+        try:
+            cleaned_response = response.strip().replace("```json", "").replace("```", "").strip()
+            suggestions_list = json.loads(cleaned_response)
+            if isinstance(suggestions_list, list):
+                result = [str(s).strip() for s in suggestions_list if str(s).strip()][:4]
+                log.info("[SUGGESTIONS] Returning %d suggestions: %s", len(result), result)
+                return result
+        except Exception as e:
+            log.error("[SUGGESTIONS] JSON parse error: %s. Raw response: %s", e, response)
+            
+        return []
+
+    def generate_dashboard_queries(self, schema, provider="gemini", model_name=None):
+        """Generates 4 diverse SQL queries for a dashboard based on the schema."""
+        log.info("[DASHBOARD] Generating dashboard queries – provider='%s'", provider)
+        prompt = ChatPromptTemplate.from_template("""
+        You are an expert Data Analyst. Given the database schema below, generate 4 distinct, insightful SQL queries that would make a great analytical dashboard.
+        
+        Requirements for the 4 queries:
+        1. One should be a KPI/metric (e.g., total users, total sales) -> chartType: "bar" or "pie"
+        2. One should be a time-series trend (e.g., registrations by month) -> chartType: "line" or "area"
+        3. One should be a categorical breakdown (e.g., users by role/status) -> chartType: "pie"
+        4. One should be a top-N ranking (e.g., top 5 most active users/products) -> chartType: "bar"
+        
+        Schema:
+        {schema}
+        
+        Rules:
+        1. Output ONLY a valid JSON array of exactly 4 objects.
+        2. Each object must have: 
+           - "title" (string, short descriptive title)
+           - "query" (string, the valid SQL query compatible with standard SQL/Postgres)
+           - "chartType" (string, one of: "bar", "line", "pie", "area")
+        3. Do not include any markdown formatting like ```json.
+        
+        Output:
+        """)
+        llm = self.get_llm(provider, model_name, temperature=0.7)
+        chain = prompt | llm | self.parser
+
+        t0 = time.perf_counter()
+        response = chain.invoke({"schema": schema})
+        elapsed = time.perf_counter() - t0
+        log.debug("[DASHBOARD] LLM responded in %.2fs", elapsed)
+
+        try:
+            cleaned_response = response.strip().replace("```json", "").replace("```", "").strip()
+            queries = json.loads(cleaned_response)
+            if isinstance(queries, list):
+                log.info("[DASHBOARD] Successfully parsed %d dashboard queries.", len(queries))
+                return queries
+        except Exception as e:
+            log.error("[DASHBOARD] JSON parse error: %s. Raw response: %s", e, response)
+            
+        return []
 
     def summarize_conversation(self, question, response_text, provider="gemini", model_name=None):
         """Generates a short, 3-5 word title for a conversation."""

@@ -42,7 +42,12 @@ import {
   Loader2,
   CheckCircle2,
   AlertCircle,
+  Mail,
+  Link as LinkIcon,
+  Image as ImageIcon,
+  FileSpreadsheet,
   ArrowLeft,
+  ArrowDown,
   Camera,
   Video,
   Monitor,
@@ -74,7 +79,11 @@ import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { useState, useRef, useEffect } from "react";
-
+import ReactMarkdown from 'react-markdown';
+import * as xlsx from 'xlsx';
+import * as htmlToImage from 'html-to-image';
+import { ChartRenderer } from "@/components/ChartRenderer";
+import { AutoDashboard, DashboardWidget } from "@/components/AutoDashboard";
 interface Message {
   id: string;
   role: "user" | "assistant";
@@ -89,6 +98,8 @@ interface Message {
     headers: string[];
     rows: string[][];
   };
+  visualization?: string | null;
+  dashboardWidgets?: DashboardWidget[];
   versions?: {
     content: string;
     sql?: string;
@@ -110,31 +121,96 @@ interface Message {
 
 const initialMessages: Message[] = [];
 
-const dbSuggestions: Record<string, string[]> = {
-  default: [
-    "List all tables in the database",
-    "Show the schema of the most active table",
-    "How many records were added today?",
-  ],
-  postgresql: [
-    "Show all active connections",
-    "List the top 10 largest tables",
-    "Show recent database locks",
-  ],
-  mysql: [
-    "Show current process list",
-    "List database indexes",
-    "Show table status and sizes",
-  ],
-  demo: [
-    "Top products by sales",
-    "Users who signed up last week",
-    "Revenue trend by month",
-    "Total inventory value",
-  ]
+const chatHistory: { id: string; title: string; active: boolean }[] = [];
+
+const FALLBACK_SUGGESTIONS = [
+  "Show me the list of tables in this database.",
+  "Describe the schema and columns of the primary tables.",
+  "Show the top 10 most recent records from the main table.",
+  "Explain the relationships between the tables in this schema."
+];
+
+const renderCell = (cell: any) => {
+  if (cell === null || cell === undefined) return "";
+  if (typeof cell === 'object') {
+    return <pre className="whitespace-pre-wrap text-xs bg-slate-900/5 dark:bg-slate-900/30 p-2 rounded-md border border-slate-200 dark:border-white/5">{JSON.stringify(cell, null, 2)}</pre>;
+  }
+  if (typeof cell === 'string' && (cell.trim().startsWith('{') || cell.trim().startsWith('['))) {
+    try {
+      const parsed = JSON.parse(cell);
+      return <pre className="whitespace-pre-wrap text-xs bg-slate-900/5 dark:bg-slate-900/30 p-2 rounded-md border border-slate-200 dark:border-white/5">{JSON.stringify(parsed, null, 2)}</pre>;
+    } catch(e) {
+      // ignore
+    }
+  }
+  return String(cell);
 };
 
-const chatHistory: { id: string; title: string; active: boolean }[] = [];
+const exportToCSV = (tableData: { headers: string[]; rows: any[][] }) => {
+  if (!tableData || !tableData.headers || !tableData.rows) return;
+  const csvContent = [
+    tableData.headers.join(","),
+    ...tableData.rows.map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(","))
+  ].join("\n");
+  
+  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.setAttribute("href", url);
+  link.setAttribute("download", "insight_sql_export.csv");
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+};
+
+const exportToExcel = (tableData: { headers: string[]; rows: any[][] }) => {
+  if (!tableData || !tableData.headers || !tableData.rows) return;
+  const worksheet = xlsx.utils.aoa_to_sheet([tableData.headers, ...tableData.rows]);
+  const workbook = xlsx.utils.book_new();
+  xlsx.utils.book_append_sheet(workbook, worksheet, "Results");
+  xlsx.writeFile(workbook, "insight_sql_export.xlsx");
+};
+
+const exportToImage = async (ref: React.RefObject<HTMLDivElement>, format: 'png' | 'jpeg') => {
+  if (!ref.current) return;
+  try {
+    const dataUrl = format === 'png' 
+      ? await htmlToImage.toPng(ref.current, { backgroundColor: '#0f172a', style: { transform: 'scale(1)' } })
+      : await htmlToImage.toJpeg(ref.current, { backgroundColor: '#0f172a', style: { transform: 'scale(1)' }, quality: 0.95 });
+      
+    const link = document.createElement("a");
+    link.href = dataUrl;
+    link.download = `insight_sql_export.${format}`;
+    link.click();
+  } catch (err) {
+    console.error("Failed to export image", err);
+    alert("Failed to export image. Please try another format.");
+  }
+};
+
+const shareToMail = (tableData: { headers: string[]; rows: any[][] }) => {
+  if (!tableData) return;
+  const sampleRows = tableData.rows.slice(0, 5);
+  const bodyText = `Here are the latest database insights:\n\n${tableData.headers.join(" | ")}\n` + 
+               sampleRows.map(r => r.join(" | ")).join("\n") + 
+               (tableData.rows.length > 5 ? `\n...and ${tableData.rows.length - 5} more rows.` : "") +
+               `\n\nGenerated by InsightSQL.`;
+               
+  // Ensure we don't exceed URL limits
+  const safeBody = bodyText.substring(0, 1500) + (bodyText.length > 1500 ? "...\n[Data Truncated]" : "");
+  
+  // Use Gmail compose URL instead of mailto: for better web compatibility
+  const gmailUrl = `https://mail.google.com/mail/?view=cm&fs=1&su=${encodeURIComponent('Database Insights Report')}&body=${encodeURIComponent(safeBody)}`;
+  
+  window.open(gmailUrl, '_blank');
+};
+
+const copyData = (tableData: { headers: string[]; rows: any[][] }) => {
+  if (!tableData) return;
+  const text = [tableData.headers.join("\t"), ...tableData.rows.map(r => r.join("\t"))].join("\n");
+  navigator.clipboard.writeText(text);
+  alert("Data copied to clipboard!");
+};
 
 export default function ChatPage() {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -142,6 +218,9 @@ export default function ChatPage() {
   const [isTyping, setIsTyping] = useState(false);
   const [showSQL, setShowSQL] = useState(true);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  const exportAreaRef = useRef<HTMLDivElement>(null);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -149,6 +228,7 @@ export default function ChatPage() {
   const [editValue, setEditValue] = useState("");
   const [selection, setSelection] = useState<{ text: string, x: number, y: number } | null>(null);
   const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [isGeneratingSuggestions, setIsGeneratingSuggestions] = useState(false);
 
   const [provider, setProvider] = useState<string>("gemini");
   const [model, setModel] = useState<string>("gemini-2.0-flash");
@@ -182,6 +262,21 @@ export default function ChatPage() {
   const [history, setHistory] = useState<{ id: string; title: string; active: boolean; messages: Message[]; isFavorite?: boolean; updatedAt?: number }[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [isHistoryOpen, setIsHistoryOpen] = useState(true);
+  const [isMobile, setIsMobile] = useState(false);
+  const [showScrollDown, setShowScrollDown] = useState(false);
+
+  useEffect(() => {
+    const checkMobile = () => {
+      const mobile = window.innerWidth < 1024;
+      setIsMobile(mobile);
+      if (mobile) {
+        setIsHistoryOpen(false);
+      }
+    };
+    checkMobile();
+    window.addEventListener("resize", checkMobile);
+    return () => window.removeEventListener("resize", checkMobile);
+  }, []);
   const [isHistorySearchOpen, setIsHistorySearchOpen] = useState(false);
   const [historySearchQuery, setHistorySearchQuery] = useState("");
   const [savedQueryIds, setSavedQueryIds] = useState<Set<string>>(new Set());
@@ -585,21 +680,12 @@ export default function ChatPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isListening, setIsListening] = useState(false);
   const recognitionRef = useRef<any>(null);
+  const baseInputRef = useRef<string>("");
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [editingSessionTitle, setEditingSessionTitle] = useState("");
 
-  const getSuggestions = () => {
-    const db = databases.find(d => d.id === selectedDb);
-    if (!db) return dbSuggestions.default;
-    return dbSuggestions[db.name.toLowerCase()] || dbSuggestions[db.type] || dbSuggestions.default;
-  };
-
   const fetchSuggestions = async (msgs: Message[]) => {
-    if (msgs.length === 0) {
-      setSuggestions(getSuggestions());
-      return;
-    }
-
+    setIsGeneratingSuggestions(true);
     try {
       const response = await fetch("http://localhost:8000/suggest", {
         method: "POST",
@@ -613,13 +699,21 @@ export default function ChatPage() {
       });
       if (response.ok) {
         const data = await response.json();
-        setSuggestions(data.length > 0 ? data : getSuggestions());
-      } else {
-        setSuggestions(getSuggestions());
+        if (data && data.length > 0) {
+          setSuggestions(data);
+          return data;
+        }
       }
-    } catch (e) {
-      setSuggestions(getSuggestions());
+    } catch (e: any) {
+      console.warn("Failed to fetch dynamic suggestions (backend may be offline):", e.message || e);
+    } finally {
+      setIsGeneratingSuggestions(false);
     }
+    
+    // Fallback if suggestions could not be fetched
+    const fallback = FALLBACK_SUGGESTIONS;
+    setSuggestions(fallback);
+    return fallback;
   };
 
   const handleAttachFile = () => {
@@ -627,20 +721,20 @@ export default function ChatPage() {
   };
 
   const startCamera = async () => {
-    try {
-      setIsCameraOpen(true);
-      setTimeout(async () => {
+    setIsCameraOpen(true);
+    setTimeout(async () => {
+      try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } });
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
         }
         setCameraStream(stream);
-      }, 100);
-    } catch (err) {
-      console.error("Error accessing camera:", err);
-      alert("Could not access camera. Please check your camera permissions.");
-      setIsCameraOpen(false);
-    }
+      } catch (err: any) {
+        console.warn("Camera permission denied or dismissed:", err.name || err);
+        alert("Could not access camera. Please check your camera permissions in browser settings.");
+        setIsCameraOpen(false);
+      }
+    }, 100);
   };
 
   const stopCamera = () => {
@@ -745,10 +839,35 @@ export default function ChatPage() {
     }
   };
 
-  const handleGenerate = () => {
-    const suggestions = getSuggestions();
-    const random = suggestions[Math.floor(Math.random() * suggestions.length)];
-    setInput(random);
+  const handleGenerate = async () => {
+    if (isGeneratingSuggestions) return;
+    
+    setIsGeneratingSuggestions(true);
+    try {
+      if (suggestions.length > 0) {
+        // Show a brief premium "thinking" delay to give the user a tactile/visual feeling that the AI is working
+        await new Promise((resolve) => setTimeout(resolve, 550));
+        const random = suggestions[Math.floor(Math.random() * suggestions.length)];
+        setInput(random);
+        setTimeout(() => {
+          textareaRef.current?.focus();
+        }, 50);
+      } else {
+        // Fetch suggestions dynamically and select one
+        const fetched = await fetchSuggestions(messages);
+        if (fetched && fetched.length > 0) {
+          const random = fetched[Math.floor(Math.random() * fetched.length)];
+          setInput(random);
+          setTimeout(() => {
+            textareaRef.current?.focus();
+          }, 50);
+        }
+      }
+    } catch (err) {
+      console.error("Error generating suggestion", err);
+    } finally {
+      setIsGeneratingSuggestions(false);
+    }
   };
 
   const handleRegenerate = async (msgId: string) => {
@@ -917,6 +1036,7 @@ export default function ChatPage() {
         generated_query: data.generated_query,
         query_type: data.query_type,
         tableData: data.tableData,
+        visualization: data.visualization,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       };
 
@@ -927,6 +1047,7 @@ export default function ChatPage() {
         generated_query: assistantMsg.generated_query,
         query_type: assistantMsg.query_type,
         tableData: assistantMsg.tableData,
+        visualization: assistantMsg.visualization,
         timestamp: assistantMsg.timestamp
       };
 
@@ -956,16 +1077,23 @@ export default function ChatPage() {
         setHistory(parsedHistory);
 
         if (savedCurrentId) {
-          setCurrentSessionId(savedCurrentId);
-          const currentSession = parsedHistory.find((s: any) => s.id === savedCurrentId);
-          if (currentSession) {
-            setMessages(currentSession.messages || []);
-            fetchSuggestions(currentSession.messages || []);
+          const session = parsedHistory.find((s: any) => s.id === savedCurrentId);
+          if (session) {
+            setMessages(session.messages || []);
+            setCurrentSessionId(savedCurrentId);
+            fetchSuggestions(session.messages || []);
+          } else {
+            fetchSuggestions([]);
           }
+        } else {
+          fetchSuggestions([]);
         }
       } catch (e) {
         console.error("Error parsing saved history", e);
+        fetchSuggestions([]);
       }
+    } else {
+      fetchSuggestions([]);
     }
   }, []);
 
@@ -982,6 +1110,13 @@ export default function ChatPage() {
       localStorage.removeItem("current_session_id");
     }
   }, [currentSessionId]);
+
+  // Re-fetch dynamic suggestions whenever the selected database changes
+  useEffect(() => {
+    if (selectedDb) {
+      fetchSuggestions(messages);
+    }
+  }, [selectedDb]);
 
   const handleNewChat = () => {
     setMessages([]);
@@ -1215,6 +1350,23 @@ export default function ChatPage() {
     }
   };
 
+  const scrollToBottomSmooth = () => {
+    if (messagesContainerRef.current) {
+      messagesContainerRef.current.scrollTo({
+        top: messagesContainerRef.current.scrollHeight,
+        behavior: "smooth"
+      });
+    }
+  };
+
+  const handleScroll = () => {
+    if (messagesContainerRef.current) {
+      const { scrollTop, scrollHeight, clientHeight } = messagesContainerRef.current;
+      const isScrolledUp = scrollHeight - scrollTop - clientHeight > 300;
+      setShowScrollDown(isScrolledUp);
+    }
+  };
+
   useEffect(() => {
     const runMsgId = localStorage.getItem("insight_run_saved_query_msg_id");
     if (runMsgId) {
@@ -1240,13 +1392,10 @@ export default function ChatPage() {
 
       recognitionRef.current.onresult = (event: any) => {
         let transcript = "";
-        for (let i = event.resultIndex; i < event.results.length; i++) {
+        for (let i = 0; i < event.results.length; i++) {
           transcript += event.results[i][0].transcript;
         }
-        setInput(prev => {
-          const base = prev.trim();
-          return base ? `${base} ${transcript}` : transcript;
-        });
+        setInput(baseInputRef.current ? `${baseInputRef.current} ${transcript}` : transcript);
       };
 
       recognitionRef.current.onend = () => {
@@ -1254,7 +1403,12 @@ export default function ChatPage() {
       };
 
       recognitionRef.current.onerror = (event: any) => {
-        console.error("Speech Recognition Error:", event.error);
+        if (event.error === "not-allowed") {
+          console.warn("Speech Recognition permission denied or dismissed by user.");
+          alert("Speech recognition microphone permission was denied. Please enable microphone permissions in your browser settings to use voice query.");
+        } else {
+          console.error("Speech Recognition Error:", event.error);
+        }
         setIsListening(false);
       };
     }
@@ -1266,6 +1420,7 @@ export default function ChatPage() {
       setIsListening(false);
     } else {
       try {
+        baseInputRef.current = input.trim();
         recognitionRef.current?.start();
         setIsListening(true);
       } catch (e) {
@@ -1428,6 +1583,35 @@ export default function ChatPage() {
     setIsTyping(true);
 
     try {
+      if (input.trim() === "/dashboard") {
+        const response = await fetch("http://localhost:8000/dashboard-generate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            question: input,
+            provider: provider,
+            model: model,
+            connection_id: effectiveDb,
+            connection_ids: selectedDbs.length > 0 ? selectedDbs : [effectiveDb]
+          }),
+        });
+
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || "Failed to generate dashboard");
+
+        const dashboardMsg: Message = {
+          id: Date.now().toString() + "-dashboard",
+          role: "assistant",
+          content: "Here is your generated Auto-Dashboard based on the database schema:",
+          dashboardWidgets: data.widgets,
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        };
+
+        setMessages((prev) => [...prev, dashboardMsg]);
+        setIsTyping(false);
+        return;
+      }
+
       const response = await fetch("http://localhost:8000/ask", {
         method: "POST",
         headers: {
@@ -1516,7 +1700,20 @@ export default function ChatPage() {
       return activeResult.tableData.rows.map((row: any[]) => {
         const obj: any = {};
         headers.forEach((header: string, idx: number) => {
-          obj[header] = row[idx];
+          const val = row[idx];
+          if (typeof val === 'string' && val.trim().startsWith('{')) {
+            try {
+              const parsed = JSON.parse(val);
+              if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+                // Flatten the JSON object into the row
+                Object.assign(obj, parsed);
+                return; // Skip adding the raw JSON string column
+              }
+            } catch(e) {
+              // Not valid JSON object, fall through
+            }
+          }
+          obj[header] = val;
         });
         return obj;
       });
@@ -1532,15 +1729,25 @@ export default function ChatPage() {
   const useStatsCard = hasResults && isObjectRow && resultColumns.length === 1 && resultsData.length === 1;
 
   return (
-    <div className="h-full flex overflow-hidden">
-      <AnimatePresence mode="wait">
+    <div className="h-full flex overflow-hidden relative">
+      {/* Mobile Drawer Backdrop for History */}
+      {isMobile && isHistoryOpen && (
+        <div
+          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40 transition-opacity duration-300"
+          onClick={() => setIsHistoryOpen(false)}
+        />
+      )}
+
+      <AnimatePresence>
         {isHistoryOpen && (
           <motion.div
-            initial={{ width: 0, opacity: 0 }}
-            animate={{ width: historyWidth, opacity: 1 }}
-            exit={{ width: 0, opacity: 0 }}
+            initial={isMobile ? { x: -280 } : { width: 0, opacity: 0 }}
+            animate={isMobile ? { x: 0, width: 280 } : { width: historyWidth, opacity: 1 }}
+            exit={isMobile ? { x: -280 } : { width: 0, opacity: 0 }}
             transition={{ duration: 0.3, ease: "easeInOut" }}
-            className="hidden xl:flex border-r flex-col bg-muted/20 overflow-hidden h-full relative"
+            className={`flex border-r border-slate-200 dark:border-slate-900/50 flex-col bg-[var(--surface-0)] dark:bg-muted/10 overflow-hidden h-full ${
+              isMobile ? "fixed inset-y-0 left-0 z-50 shadow-2xl w-[280px]" : "relative"
+            }`}
           >
             <div className="p-3.5 min-h-[57px] flex items-center justify-between transition-all duration-300">
               {isHistorySearchOpen ? (
@@ -1690,11 +1897,13 @@ export default function ChatPage() {
               </button>
             </ScrollArea>
             {/* Dynamic Drag Handle */}
-            <div
-              onMouseDown={startResizingHistory}
-              className={`absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-indigo-500/60 z-50 transition-all ${isResizingHistory ? "bg-indigo-650 w-[3px] border-r-2 border-indigo-400" : "bg-transparent hover:w-1.5"
-                }`}
-            />
+            {!isMobile && (
+              <div
+                onMouseDown={startResizingHistory}
+                className={`absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-indigo-500/60 z-50 transition-all ${isResizingHistory ? "bg-indigo-650 w-[3px] border-r-2 border-indigo-400" : "bg-transparent hover:w-1.5"
+                  }`}
+              />
+            )}
           </motion.div>
         )}
       </AnimatePresence>
@@ -1908,7 +2117,11 @@ export default function ChatPage() {
           </div>
         </div>
 
-        <div ref={messagesContainerRef} className="flex-1 min-h-0 border-t border-b bg-muted/5 overflow-y-auto">
+        <div 
+          ref={messagesContainerRef} 
+          onScroll={handleScroll}
+          className="flex-1 min-h-0 border-t border-b bg-muted/5 overflow-y-auto"
+        >
           <div className="max-w-3xl mx-auto p-6 space-y-6 pb-72">
             <AnimatePresence>
               {messages.map((msg) => (
@@ -1968,7 +2181,12 @@ export default function ChatPage() {
                               />
                             )
                           )}
-                          <p className={`text-sm leading-relaxed ${msg.role === "user" ? "!text-white font-medium" : "text-slate-800 dark:text-slate-200"}`}>{msg.content}</p>
+                          <div className={`text-sm leading-relaxed prose dark:prose-invert max-w-none ${msg.role === "user" ? "!text-white font-medium" : "text-slate-800 dark:text-slate-200"}`}>
+                            <ReactMarkdown>{msg.content}</ReactMarkdown>
+                          </div>
+                          {msg.dashboardWidgets && (
+                            <AutoDashboard widgets={msg.dashboardWidgets} />
+                          )}
                         </div>
                       )}
                     </div>
@@ -2081,6 +2299,9 @@ export default function ChatPage() {
                           </TabsList>
  
                           <TabsContent value="results" className="p-0">
+                            {msg.visualization && msg.tableData && (
+                              <ChartRenderer tableData={msg.tableData} visualizationType={msg.visualization} />
+                            )}
                             {msg.tableData ? (
                               <div className="overflow-x-auto">
                                 <table className="w-full text-left text-xs">
@@ -2101,7 +2322,7 @@ export default function ChatPage() {
                                       <tr key={i} className="border-t hover:bg-muted/30 transition-colors">
                                         {row.slice(0, 3).map((cell, j) => (
                                           <td key={j} className="px-4 py-2.5 text-xs text-slate-800 dark:text-slate-200">
-                                            {cell}
+                                            {renderCell(cell)}
                                           </td>
                                         ))}
                                         {row.length > 3 && (
@@ -2235,7 +2456,22 @@ export default function ChatPage() {
 
         {/* Input Area */}
         <div className="absolute bottom-0 left-0 right-0 p-8 bg-gradient-to-t from-[var(--surface-0)] via-[var(--surface-0)] to-transparent z-10">
-          <div className="max-w-3xl mx-auto space-y-6">
+          <div className="max-w-3xl mx-auto space-y-6 relative">
+            {/* Floating Scroll to Bottom Button */}
+            <AnimatePresence>
+              {showScrollDown && (
+                <motion.button
+                  initial={{ opacity: 0, scale: 0.8, y: 10 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.8, y: 10 }}
+                  onClick={scrollToBottomSmooth}
+                  className="absolute -top-16 right-4 md:right-0 z-30 p-3 rounded-full bg-indigo-650 hover:bg-indigo-700 text-white shadow-xl hover:shadow-indigo-500/20 active:scale-95 transition-all border border-indigo-500/30 flex items-center justify-center group cursor-pointer"
+                  title="Scroll to bottom"
+                >
+                  <ArrowDown className="h-5 w-5" />
+                </motion.button>
+              )}
+            </AnimatePresence>
             <div className="relative group">
               {/* Floating Screen Share Preview */}
               {isScreenSharing && (
@@ -2283,9 +2519,15 @@ export default function ChatPage() {
                     onClick={handleGenerate}
                     variant="ghost"
                     size="icon"
-                    className="h-10 w-10 text-slate-500 hover:text-indigo-500 m-2"
+                    disabled={isGeneratingSuggestions}
+                    className="h-10 w-10 text-slate-500 hover:text-indigo-500 m-2 relative transition-all active:scale-95 disabled:opacity-50"
+                    title="Generate query suggestion"
                   >
-                    <Sparkles className="h-5 w-5" />
+                    {isGeneratingSuggestions ? (
+                      <Loader2 className="h-5 w-5 animate-spin text-indigo-500" />
+                    ) : (
+                      <Sparkles className="h-5 w-5 transition-transform hover:scale-110" />
+                    )}
                   </Button>
                   <Textarea
                     ref={textareaRef}
@@ -2389,17 +2631,21 @@ export default function ChatPage() {
       <AnimatePresence>
         {isResultsOpen && activeResult && (
           <motion.div
-            initial={{ width: 0, opacity: 0 }}
-            animate={{ width: summaryWidth, opacity: 1 }}
-            exit={{ width: 0, opacity: 0 }}
-            className="border-l border-slate-900/50 bg-[var(--surface-0)] h-full overflow-hidden flex-shrink-0 flex flex-col relative z-20 shadow-2xl"
+            initial={isMobile ? { x: 280, width: "100%" } : { width: 0, opacity: 0 }}
+            animate={isMobile ? { x: 0, width: "100%" } : { width: summaryWidth, opacity: 1 }}
+            exit={isMobile ? { x: 280, width: "100%" } : { width: 0, opacity: 0 }}
+            className={`border-l border-slate-200 dark:border-slate-900/50 bg-[var(--surface-0)] h-full overflow-hidden flex-shrink-0 flex flex-col shadow-2xl ${
+              isMobile ? "fixed inset-y-0 right-0 z-50 w-full" : "relative z-20"
+            }`}
           >
             {/* Dynamic Drag Handle */}
-            <div
-              onMouseDown={startResizingSummary}
-              className={`absolute left-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-indigo-500/60 z-50 transition-all ${isResizingSummary ? "bg-indigo-650 w-[3px] border-l-2 border-indigo-400" : "bg-transparent hover:w-1.5"
-                }`}
-            />
+            {!isMobile && (
+              <div
+                onMouseDown={startResizingSummary}
+                className={`absolute left-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-indigo-500/60 z-50 transition-all ${isResizingSummary ? "bg-indigo-650 w-[3px] border-l-2 border-indigo-400" : "bg-transparent hover:w-1.5"
+                  }`}
+              />
+            )}
             <div className="flex-1 overflow-y-auto overflow-x-hidden p-8 space-y-10 min-w-0 flex flex-col">
               {/* Header */}
               <div className="flex items-center justify-between">
@@ -2415,7 +2661,7 @@ export default function ChatPage() {
                     className="h-9 w-9 rounded-full text-slate-500 hover:text-white bg-slate-900/30"
                     onClick={() => setIsResultsOpen(false)}
                   >
-                    <ChevronRight className="h-5 w-5" />
+                    {isMobile ? <X className="h-5 w-5" /> : <ChevronRight className="h-5 w-5" />}
                   </Button>
                 </div>
               </div>
@@ -2462,20 +2708,50 @@ export default function ChatPage() {
                       return (
                         <li key={i} className="flex items-center gap-4 text-sm text-slate-700 dark:text-slate-300 font-medium p-3 bg-slate-900/5 dark:bg-slate-900/30 rounded-xl border border-slate-200 dark:border-white/5 hover:border-indigo-500/30 transition-colors">
                           <div className="h-2 w-2 rounded-full bg-indigo-500 shadow-[0_0_8px_var(--color-indigo-500)] flex-shrink-0" />
-                          <span className="break-all">{String(val)}</span>
+                          <span className="break-all">{renderCell(val)}</span>
                         </li>
                       );
                     })}
                   </ul>
                 </Card>
               ) : (
-                <Card className="bg-[var(--surface-1)] border-slate-900/50 shadow-2xl rounded-[28px] overflow-hidden border-none flex flex-col h-full max-h-[80vh] w-full max-w-full min-w-0">
+                <Card ref={exportAreaRef} className="bg-[var(--surface-1)] border-slate-900/50 shadow-2xl rounded-[28px] overflow-hidden border-none flex flex-col h-full max-h-[80vh] w-full max-w-full min-w-0 bg-white dark:bg-slate-950">
                   <div className="flex items-center justify-between px-8 py-5 border-b border-slate-800/50 flex-shrink-0">
                     <h3 className="text-sm font-black text-slate-900 dark:text-white uppercase tracking-widest">Query Results</h3>
-                    <Button variant="ghost" size="sm" className="h-8 text-[11px] font-black gap-2 px-4 text-slate-400 hover:text-white bg-[var(--surface-2)] border border-slate-800 rounded-xl">
-                      <Download className="h-4 w-4" />
-                      Export
-                    </Button>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger className="inline-flex items-center justify-center h-8 text-[11px] font-black gap-2 px-4 text-slate-400 hover:text-white bg-[var(--surface-2)] border border-slate-800 rounded-xl cursor-pointer hover:bg-slate-800/50 transition-colors focus:outline-none">
+                        <Download className="h-4 w-4" />
+                        Export
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className="w-48 bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-900 dark:text-white shadow-2xl rounded-xl z-[100] p-1.5">
+                        <DropdownMenuItem onClick={() => { if (activeResult?.tableData) exportToCSV(activeResult.tableData); }} className="cursor-pointer text-xs flex items-center gap-2.5 py-2 px-3 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 focus:bg-slate-100 dark:focus:bg-slate-800">
+                          <Download className="h-4 w-4 text-emerald-500" />
+                          <span>Export as CSV</span>
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => { if (activeResult?.tableData) exportToExcel(activeResult.tableData); }} className="cursor-pointer text-xs flex items-center gap-2.5 py-2 px-3 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 focus:bg-slate-100 dark:focus:bg-slate-800">
+                          <FileSpreadsheet className="h-4 w-4 text-emerald-400" />
+                          <span>Export as Excel</span>
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator className="bg-slate-200 dark:bg-slate-800/50" />
+                        <DropdownMenuItem onClick={() => exportToImage(exportAreaRef, 'png')} className="cursor-pointer text-xs flex items-center gap-2.5 py-2 px-3 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 focus:bg-slate-100 dark:focus:bg-slate-800">
+                          <ImageIcon className="h-4 w-4 text-blue-400" />
+                          <span>Download PNG Image</span>
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => exportToImage(exportAreaRef, 'jpeg')} className="cursor-pointer text-xs flex items-center gap-2.5 py-2 px-3 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 focus:bg-slate-100 dark:focus:bg-slate-800">
+                          <ImageIcon className="h-4 w-4 text-indigo-400" />
+                          <span>Download JPG Image</span>
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator className="bg-slate-200 dark:bg-slate-800/50" />
+                        <DropdownMenuItem onClick={() => { if (activeResult?.tableData) shareToMail(activeResult.tableData); }} className="cursor-pointer text-xs flex items-center gap-2.5 py-2 px-3 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 focus:bg-slate-100 dark:focus:bg-slate-800">
+                          <Mail className="h-4 w-4 text-amber-400" />
+                          <span>Share via Email</span>
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => { if (activeResult?.tableData) copyData(activeResult.tableData); }} className="cursor-pointer text-xs flex items-center gap-2.5 py-2 px-3 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 focus:bg-slate-100 dark:focus:bg-slate-800">
+                          <LinkIcon className="h-4 w-4 text-purple-400" />
+                          <span>Copy Raw Data</span>
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   </div>
                   <div className="overflow-x-auto flex-1 custom-scrollbar">
                     <table className="w-full text-xs">
@@ -2491,7 +2767,7 @@ export default function ChatPage() {
                           <tr key={i} className="hover:bg-white/5 transition-colors cursor-pointer group">
                             {resultColumns.map((col, j) => (
                               <td key={j} className="px-8 py-5 text-slate-700 dark:text-slate-300 font-medium whitespace-nowrap max-w-[300px] truncate" title={String(row[col])}>
-                                {String(row[col])}
+                                {renderCell(row[col])}
                               </td>
                             ))}
                           </tr>

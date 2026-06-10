@@ -1,0 +1,16 @@
+{
+  "users": [
+    {
+      "id": 1,
+      "name": "Jane Doe",
+      "email": "jane.doe@acme.com",
+      "password": "$2b$10$3wAhx.L26Ghl64MF0/n0K.rOxmKz/ZPYZGzxMVdPDAWJVRUFiJFme"
+    },
+    {
+      "name": "retave hitzcart",
+      "email": "retave4335@hitzcart.com",
+      "password": "$2b$10$EgUhRG2tBmeo5mYpWMxwAeN.nKFzGiK0HwuuHKrQJ0pK85D.6oKSu",
+      "id": 2
+    }
+  ]
+}

@@ -60,5 +60,22 @@
         "cloud_id": null,
         "id": "ac733574-78f7-4ec9-99da-7208fd227693",
         "is_default": true
+    },
+    {
+        "name": "TAP",
+        "type": "postgresql",
+        "host": "115.245.177.14",
+        "port": 5441,
+        "database": "tap_latest",
+        "username": "postgres",
+        "password": "Tata1234123#",
+        "account": null,
+        "warehouse": null,
+        "schema_name": null,
+        "role": null,
+        "api_key": null,
+        "cloud_id": null,
+        "id": "a482302b-83c3-4806-a3fd-2051a315a471",
+        "is_default": true
     }
 ]

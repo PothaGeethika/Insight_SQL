@@ -1,7 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { Database, Eye, EyeOff, Mail, Lock, Loader2 } from "lucide-react";
+import { Database, Eye, EyeOff, Mail, Lock, User, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -9,16 +9,16 @@ import { Separator } from "@/components/ui/separator";
 import { ThemeToggle } from "@/components/theme-toggle";
 import Link from "next/link";
 import { useState, useEffect } from "react";
-import { useSearchParams } from "next/navigation";
 
-export default function LoginPage() {
+export default function SignupPage() {
   const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [rememberMe, setRememberMe] = useState(false);
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
-  const [successMsg, setSuccessMsg] = useState("");
 
   // Redirect to dashboard if already authenticated
   useEffect(() => {
@@ -27,39 +27,23 @@ export default function LoginPage() {
     }).catch(() => {});
   }, []);
 
-  // Check for registration redirect message
-  useEffect(() => {
-    if (typeof window !== "undefined") {
-      const params = new URLSearchParams(window.location.search);
-      if (params.get("registered") === "true") {
-        setSuccessMsg("Account created successfully! Please sign in.");
-      }
-    }
-  }, []);
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (password !== confirmPassword) {
+      setError("Passwords do not match");
+      return;
+    }
     setIsLoading(true);
     setError("");
-    setSuccessMsg("");
-
     try {
-      const res = await fetch("/api/auth/login", {
+      const res = await fetch("/api/auth/signup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ name, email, password }),
       });
-
       const data = await res.json();
-
-      if (!res.ok) {
-        throw new Error(data.error || "Login failed");
-      }
-
-      // Redirect to dashboard on success
-      const params = new URLSearchParams(window.location.search);
-      const redirect = params.get("redirect") || "/dashboard";
-      window.location.href = redirect;
+      if (!res.ok) throw new Error(data.error || "Signup failed");
+      window.location.href = "/login?registered=true";
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -81,6 +65,7 @@ export default function LoginPage() {
           <div className="absolute top-1/4 -right-20 w-80 h-80 bg-blue-600/10 rounded-full blur-3xl" />
           <div className="absolute -bottom-20 -left-10 w-60 h-60 bg-purple-600/10 rounded-full blur-3xl" />
           <div className="absolute top-1/2 left-1/3 w-40 h-40 bg-cyan-600/5 rounded-full blur-3xl" />
+          <div className="absolute top-10 left-1/2 w-32 h-32 bg-indigo-500/8 rounded-full blur-2xl" />
         </div>
 
         <div className="relative z-10">
@@ -94,14 +79,14 @@ export default function LoginPage() {
 
         <div className="relative z-10 space-y-6">
           <h2 className="text-4xl font-bold leading-tight">
-            Ask questions.
+            Start your journey.
             <br />
-            Get answers.
+            Query smarter.
             <br />
-            <span className="text-blue-400">Write SQL. Instantly.</span>
+            <span className="text-blue-400">Discover insights.</span>
           </h2>
           <p className="text-slate-400 text-lg max-w-md">
-            Connect your databases and start querying with natural language. No SQL expertise required.
+            Join thousands of developers and analysts who use natural language to unlock the power of their databases.
           </p>
         </div>
 
@@ -110,7 +95,7 @@ export default function LoginPage() {
         </div>
       </motion.div>
 
-      {/* Right side - Login form */}
+      {/* Right side - Signup form */}
       <div className="flex-1 flex items-center justify-center p-6 sm:p-12 gradient-bg relative">
         <div className="absolute top-6 right-6">
           <ThemeToggle />
@@ -132,35 +117,41 @@ export default function LoginPage() {
 
           <div className="glass rounded-2xl p-8 shadow-2xl shadow-black/5">
             <div className="text-center mb-8">
-              <h1 className="text-2xl font-bold mb-2">Welcome back</h1>
+              <h1 className="text-2xl font-bold mb-2">Create your account</h1>
               <p className="text-muted-foreground text-sm">
-                Sign in to continue to InsightSQL
+                Get started with InsightSQL for free
               </p>
             </div>
 
-            {/* Success Message */}
-            {successMsg && (
-              <motion.div
-                initial={{ opacity: 0, y: -10 }}
-                animate={{ opacity: 1, y: 0 }}
-                className="mb-4 p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-sm text-center font-medium"
-              >
-                {successMsg}
-              </motion.div>
-            )}
-
-            {/* Error Message */}
             {error && (
               <motion.div
-                initial={{ opacity: 0, y: -10 }}
+                initial={{ opacity: 0, y: -8 }}
                 animate={{ opacity: 1, y: 0 }}
-                className="mb-4 p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-600 dark:text-red-400 text-sm text-center font-medium"
+                className="mb-5 p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-600 dark:text-red-400 text-sm text-center"
               >
                 {error}
               </motion.div>
             )}
 
             <form className="space-y-5" onSubmit={handleSubmit}>
+              <div className="space-y-2">
+                <Label htmlFor="name" className="text-sm font-medium">
+                  Full Name
+                </Label>
+                <div className="relative">
+                  <User className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    id="name"
+                    type="text"
+                    placeholder="John Doe"
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    className="pl-10 h-11 bg-background/50"
+                    required
+                  />
+                </div>
+              </div>
+
               <div className="space-y-2">
                 <Label htmlFor="email" className="text-sm font-medium">
                   Email
@@ -175,23 +166,14 @@ export default function LoginPage() {
                     onChange={(e) => setEmail(e.target.value)}
                     className="pl-10 h-11 bg-background/50"
                     required
-                    disabled={isLoading}
                   />
                 </div>
               </div>
 
               <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <Label htmlFor="password" className="text-sm font-medium">
-                    Password
-                  </Label>
-                  <Link
-                    href="/forgot-password"
-                    className="text-xs text-blue-600 dark:text-blue-400 hover:underline"
-                  >
-                    Forgot password?
-                  </Link>
-                </div>
+                <Label htmlFor="password" className="text-sm font-medium">
+                  Password
+                </Label>
                 <div className="relative">
                   <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                   <Input
@@ -202,7 +184,6 @@ export default function LoginPage() {
                     onChange={(e) => setPassword(e.target.value)}
                     className="pl-10 pr-10 h-11 bg-background/50"
                     required
-                    disabled={isLoading}
                   />
                   <button
                     type="button"
@@ -218,17 +199,33 @@ export default function LoginPage() {
                 </div>
               </div>
 
-              <div className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  id="remember"
-                  checked={rememberMe}
-                  onChange={(e) => setRememberMe(e.target.checked)}
-                  className="h-4 w-4 rounded border-border text-blue-600 focus:ring-blue-500"
-                />
-                <Label htmlFor="remember" className="text-sm text-muted-foreground cursor-pointer">
-                  Remember me
+              <div className="space-y-2">
+                <Label htmlFor="confirmPassword" className="text-sm font-medium">
+                  Confirm Password
                 </Label>
+                <div className="relative">
+                  <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    id="confirmPassword"
+                    type={showConfirmPassword ? "text" : "password"}
+                    placeholder="••••••••"
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    className="pl-10 pr-10 h-11 bg-background/50"
+                    required
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    {showConfirmPassword ? (
+                      <EyeOff className="h-4 w-4" />
+                    ) : (
+                      <Eye className="h-4 w-4" />
+                    )}
+                  </button>
+                </div>
               </div>
 
               <Button
@@ -237,12 +234,12 @@ export default function LoginPage() {
                 className="w-full h-11 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white shadow-lg shadow-blue-500/25 font-semibold text-sm"
               >
                 {isLoading ? (
-                  <span className="flex items-center gap-2">
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    Signing in...
-                  </span>
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Creating account...
+                  </>
                 ) : (
-                  "Sign in"
+                  "Create account"
                 )}
               </Button>
             </form>
@@ -276,13 +273,13 @@ export default function LoginPage() {
                   fill="#EA4335"
                 />
               </svg>
-              Sign in with Google
+              Sign up with Google
             </Button>
 
             <p className="text-center text-sm text-muted-foreground mt-6">
-              Don&apos;t have an account?{" "}
-              <Link href="/signup" className="text-blue-600 dark:text-blue-400 hover:underline font-medium">
-                Sign up
+              Already have an account?{" "}
+              <Link href="/login" className="text-blue-600 dark:text-blue-400 hover:underline font-medium">
+                Sign in
               </Link>
             </p>
           </div>

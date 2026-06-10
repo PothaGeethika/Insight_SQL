@@ -23,6 +23,10 @@ import {
   Sun,
   Moon,
   LayoutGrid,
+  Menu,
+  X,
+  LogOut,
+  Loader2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -32,6 +36,12 @@ interface NavItem {
   name: string;
   href: string;
   icon: any;
+}
+
+interface AuthUser {
+  id: number;
+  name: string;
+  email: string;
 }
 
 const mainNavItems: NavItem[] = [
@@ -55,9 +65,43 @@ export default function DashboardLayout({
   const [isResizing, setIsResizing] = useState(false);
   const { theme, setTheme } = useTheme();
   const [mounted, setMounted] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
 
   useEffect(() => {
     setMounted(true);
+    const handleResize = () => {
+      const mobile = window.innerWidth < 768;
+      setIsMobile(mobile);
+      if (!mobile) {
+        setMobileOpen(false);
+      }
+    };
+    handleResize();
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
+  // Fetch current user from /api/auth/me — redirect to login if not authenticated
+  useEffect(() => {
+    const fetchUser = async () => {
+      try {
+        const res = await fetch("/api/auth/me");
+        if (res.ok) {
+          const data = await res.json();
+          setUser(data.user);
+        } else {
+          // Not authenticated — redirect to login
+          window.location.href = "/login";
+        }
+      } catch (err) {
+        console.error("Failed to fetch user:", err);
+        window.location.href = "/login";
+      }
+    };
+    fetchUser();
   }, []);
 
   // Compute actual dark mode state (resolving 'system' if needed)
@@ -97,18 +141,53 @@ export default function DashboardLayout({
     };
   }, [isResizing]);
 
+  // Handle logout
+  const handleLogout = async () => {
+    setIsLoggingOut(true);
+    try {
+      await fetch("/api/auth/logout", { method: "POST" });
+      window.location.href = "/login";
+    } catch (err) {
+      console.error("Logout error:", err);
+      // Force redirect even on error
+      window.location.href = "/login";
+    }
+  };
+
+  // Derive user display info
+  const userName = user?.name || "User";
+  const userEmail = user?.email || "";
+  const userInitials = userName
+    .split(" ")
+    .map((n) => n[0])
+    .join("")
+    .toUpperCase()
+    .slice(0, 2);
+  const firstName = userName.split(" ")[0];
 
   return (
     <div className="flex h-screen w-full overflow-hidden font-sans bg-white dark:bg-[var(--surface-0)] text-slate-800 dark:text-slate-300 transition-colors duration-300">
+      
+      {/* Mobile Drawer Backdrop Overlay */}
+      {isMobile && mobileOpen && (
+        <div
+          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40 transition-opacity duration-300"
+          onClick={() => setMobileOpen(false)}
+        />
+      )}
+
       {/* Sidebar */}
       <motion.aside
         initial={false}
-        animate={{ width: collapsed ? 80 : sidebarWidth }}
-        className="relative h-full flex flex-col z-30 bg-slate-50 dark:bg-[var(--surface-0)] border-r border-slate-200 dark:border-slate-900/40 transition-colors duration-300"
+        animate={isMobile ? { x: mobileOpen ? 0 : -280, width: 280 } : { x: 0, width: collapsed ? 80 : sidebarWidth }}
+        transition={{ type: "spring", stiffness: 300, damping: 30 }}
+        className={`flex flex-col z-50 md:z-30 bg-slate-50 dark:bg-[var(--surface-0)] border-r border-slate-200 dark:border-slate-900/40 transition-colors duration-300 ${
+          isMobile ? "fixed inset-y-0 left-0 shadow-2xl" : "relative h-full"
+        }`}
       >
         {/* Logo Header */}
         <div className="p-7 flex items-center justify-between">
-          {!collapsed && (
+          {(!collapsed || isMobile) && (
             <motion.div
               initial={{ opacity: 0, x: -10 }}
               animate={{ opacity: 1, x: 0 }}
@@ -120,33 +199,43 @@ export default function DashboardLayout({
               <span className="font-black text-xl tracking-tight text-slate-900 dark:text-white">InsightSQL</span>
             </motion.div>
           )}
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => setCollapsed(!collapsed)}
-            className="h-8 w-8 text-slate-400 dark:text-slate-500 hover:text-slate-900 dark:hover:text-white transition-colors"
-          >
-            {collapsed ? <ChevronRight className="h-5 w-5" /> : <ChevronLeft className="h-5 w-5" />}
-          </Button>
+          
+          {isMobile ? (
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setMobileOpen(false)}
+              className="h-8 w-8 text-slate-400 dark:text-slate-500 hover:text-slate-900 dark:hover:text-white"
+            >
+              <X className="h-5 w-5" />
+            </Button>
+          ) : (
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setCollapsed(!collapsed)}
+              className="h-8 w-8 text-slate-400 dark:text-slate-500 hover:text-slate-900 dark:hover:text-white transition-colors"
+            >
+              {collapsed ? <ChevronRight className="h-5 w-5" /> : <ChevronLeft className="h-5 w-5" />}
+            </Button>
+          )}
         </div>
 
-
-
         {/* Navigation */}
-        <div className="flex-1 px-4 py-2 space-y-1">
+        <div className="flex-1 px-4 py-2 space-y-1 overflow-y-auto">
           {mainNavItems.map((item) => {
             const isActive = pathname === item.href;
             return (
-              <Link key={item.name} href={item.href}>
+              <Link key={item.name} href={item.href} onClick={() => isMobile && setMobileOpen(false)}>
                 <div
                   className={`flex items-center gap-4 px-4 py-3 rounded-2xl transition-all duration-300 group cursor-pointer ${
                     isActive
-                      ? "bg-indigo-600/10 dark:bg-indigo-600/15 text-indigo-600 dark:text-white font-bold"
+                      ? "bg-indigo-650/10 dark:bg-indigo-600/15 text-indigo-600 dark:text-white font-bold"
                       : "hover:bg-slate-100 dark:hover:bg-white/5 text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100"
                   }`}
                 >
                   <item.icon className={`h-5 w-5 flex-shrink-0 ${isActive ? "text-indigo-500" : "group-hover:text-slate-700 dark:group-hover:text-slate-100 transition-colors"}`} />
-                  {!collapsed && <span className="text-sm tracking-wide">{item.name}</span>}
+                  {(!collapsed || isMobile) && <span className="text-sm tracking-wide">{item.name}</span>}
                 </div>
               </Link>
             );
@@ -155,16 +244,32 @@ export default function DashboardLayout({
 
         {/* Bottom Section: User Profile & Credits */}
         <div className="p-4 space-y-4 mb-2">
-          {!collapsed && (
+          {(!collapsed || isMobile) && (
             <div className="bg-white dark:bg-[var(--surface-1)] rounded-[24px] p-5 border border-slate-200 dark:border-slate-900/50 shadow-lg dark:shadow-2xl transition-colors">
-              <div className="flex items-center gap-3 mb-5">
-                <Avatar className="h-11 w-11 border-2 border-slate-200 dark:border-slate-800 shadow-xl">
-                  <AvatarFallback className="bg-indigo-600 text-white font-black text-xs">JD</AvatarFallback>
-                </Avatar>
-                <div className="flex-1 min-w-0">
-                  <p className="text-[13px] font-black text-slate-900 dark:text-white truncate">Jane Doe</p>
-                  <p className="text-[10px] text-slate-400 dark:text-slate-500 truncate font-medium">jane.doe@acme.com</p>
+              <div className="flex items-center justify-between gap-3 mb-5">
+                <div className="flex items-center gap-3 min-w-0 flex-1">
+                  <Avatar className="h-11 w-11 border-2 border-slate-200 dark:border-slate-800 shadow-xl">
+                    <AvatarFallback className="bg-indigo-600 text-white font-black text-xs">{userInitials}</AvatarFallback>
+                  </Avatar>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[13px] font-black text-slate-900 dark:text-white truncate">{userName}</p>
+                    <p className="text-[10px] text-slate-400 dark:text-slate-500 truncate font-medium">{userEmail}</p>
+                  </div>
                 </div>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={handleLogout}
+                  disabled={isLoggingOut}
+                  className="h-8 w-8 text-slate-400 hover:text-red-500 hover:bg-red-500/10 rounded-xl transition-all active:scale-95 flex-shrink-0 cursor-pointer"
+                  title="Log out"
+                >
+                  {isLoggingOut ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <LogOut className="h-4 w-4" />
+                  )}
+                </Button>
               </div>
 
               <div className="bg-slate-50 dark:bg-[var(--surface-2)] rounded-2xl p-4 mb-4 flex items-center justify-between border border-slate-100 dark:border-white/5 transition-colors">
@@ -197,29 +302,60 @@ export default function DashboardLayout({
           {/* Documentation Link */}
           <Link href="#" className="flex items-center gap-3 px-5 py-2 text-slate-400 dark:text-slate-500 hover:text-slate-900 dark:hover:text-white transition-all group">
             <FileText className="h-4 w-4" />
-            {!collapsed && <span className="text-xs font-black uppercase tracking-widest">Documentation</span>}
-            {!collapsed && <ExternalLink className="h-3 w-3 ml-auto opacity-0 group-hover:opacity-100 transition-opacity" />}
+            {(!collapsed || isMobile) && <span className="text-xs font-black uppercase tracking-widest">Documentation</span>}
+            {(!collapsed || isMobile) && <ExternalLink className="h-3 w-3 ml-auto opacity-0 group-hover:opacity-100 transition-opacity" />}
           </Link>
+
+          {/* Log Out Button (when collapsed) */}
+          {(collapsed && !isMobile) && (
+            <button
+              onClick={handleLogout}
+              disabled={isLoggingOut}
+              className="flex items-center justify-center w-full py-2 text-slate-400 hover:text-red-500 hover:bg-red-500/10 rounded-xl transition-all cursor-pointer disabled:opacity-50"
+              title="Log out"
+            >
+              {isLoggingOut ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <LogOut className="h-4 w-4" />
+              )}
+            </button>
+          )}
         </div>
+        
         {/* Dynamic Drag Handle */}
-        <div
-          onMouseDown={startResizing}
-          className={`absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-indigo-500/60 z-50 transition-all ${
-            isResizing ? "bg-indigo-650 w-[3px] border-r-2 border-indigo-400" : "bg-transparent hover:w-1.5"
-          }`}
-        />
+        {!isMobile && (
+          <div
+            onMouseDown={startResizing}
+            className={`absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-indigo-500/60 z-50 transition-all ${
+              isResizing ? "bg-indigo-650 w-[3px] border-r-2 border-indigo-400" : "bg-transparent hover:w-1.5"
+            }`}
+          />
+        )}
       </motion.aside>
 
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col h-full relative overflow-hidden bg-white dark:bg-[var(--surface-0)] transition-colors duration-300">
         {/* Top Header */}
-        <header className="h-20 flex items-center justify-between px-8 z-20 border-b border-slate-200 dark:border-slate-900/30 transition-colors">
-          <div className="flex flex-col">
-            <div className="flex items-center gap-2">
-              <span className="text-xl">👋</span>
-              <h1 className="text-xl font-black text-slate-900 dark:text-white tracking-tight">Welcome back, Jane</h1>
+        <header className="h-20 flex items-center justify-between px-4 md:px-8 z-20 border-b border-slate-200 dark:border-slate-900/30 transition-colors">
+          <div className="flex items-center gap-3">
+            {isMobile && (
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setMobileOpen(true)}
+                className="h-10 w-10 text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-white/5 rounded-xl mr-1"
+              >
+                <Menu className="h-5 w-5" />
+              </Button>
+            )}
+            <div className="flex flex-col">
+              <div className="flex items-center gap-2">
+                <span className="text-xl">👋</span>
+                <h1 className="text-lg md:text-xl font-black text-slate-900 dark:text-white tracking-tight">Welcome back, {firstName}</h1>
+              </div>
+              <p className="hidden md:block text-xs text-slate-500 dark:text-slate-500 font-medium mt-1">Ask questions, analyze data, and get insights from your databases.</p>
             </div>
-            <p className="text-xs text-slate-500 dark:text-slate-500 font-medium mt-1">Ask questions, analyze data, and get insights from your databases.</p>
           </div>
 
           <div className="flex items-center gap-3">
@@ -227,10 +363,10 @@ export default function DashboardLayout({
             {mounted && (
               <button
                 onClick={() => setTheme(isDarkMode ? "light" : "dark")}
-                className="relative flex items-center gap-2.5 px-4 py-2 rounded-xl border text-xs font-black uppercase tracking-widest transition-all duration-300 bg-slate-50 dark:bg-[var(--surface-1)] border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-300 hover:border-indigo-500/50 hover:text-indigo-600 dark:hover:text-white"
+                className="relative flex items-center gap-2.5 px-3 md:px-4 py-2 rounded-xl border text-xs font-black uppercase tracking-widest transition-all duration-300 bg-slate-50 dark:bg-[var(--surface-1)] border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-300 hover:border-indigo-500/50 hover:text-indigo-600 dark:hover:text-white shadow-sm"
               >
                 {/* Toggle Track */}
-                <div className={`relative h-5 w-9 rounded-full transition-colors duration-300 ${isDarkMode ? "bg-indigo-600" : "bg-slate-200"}`}>
+                <div className="relative h-5 w-9 rounded-full bg-slate-200 dark:bg-indigo-600 transition-colors duration-300">
                   <div
                     className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow-md transition-all duration-300 flex items-center justify-center ${
                       isDarkMode ? "left-[18px]" : "left-0.5"
@@ -242,7 +378,7 @@ export default function DashboardLayout({
                     }
                   </div>
                 </div>
-                <span>{isDarkMode ? "Dark" : "Light"}</span>
+                <span className="hidden md:inline">{isDarkMode ? "Dark" : "Light"}</span>
               </button>
             )}
 

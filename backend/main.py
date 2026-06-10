@@ -398,6 +398,20 @@ def ask_question(request: QueryRequest):
                  elapsed_total, len(combined_rows), len(combined_headers))
         log.info("[API] ════ END /ask ════════════════════════════════════════")
 
+        # Detect visualization intent
+        question_lower = request.question.lower()
+        visualization = None
+        if "bar chart" in question_lower or "bar graph" in question_lower:
+            visualization = "bar"
+        elif "pie chart" in question_lower or "pie graph" in question_lower:
+            visualization = "pie"
+        elif "line chart" in question_lower or "line graph" in question_lower:
+            visualization = "line"
+        elif "area chart" in question_lower or "area graph" in question_lower:
+            visualization = "area"
+        elif "chart" in question_lower or "graph" in question_lower or "dashboard" in question_lower or "plot" in question_lower:
+            visualization = "auto"
+
         return {
             "id": os.urandom(8).hex(),
             "role": "assistant",
@@ -407,6 +421,7 @@ def ask_question(request: QueryRequest):
             "generated_query": combined_sql or combined_mql or "",
             "query_type": primary_db_type,
             "timestamp": timestamp,
+            "visualization": visualization,
             "tableData": {
                 "headers": combined_headers,
                 "rows": combined_rows
@@ -418,6 +433,75 @@ def ask_question(request: QueryRequest):
         import traceback
         log.error("[API] Unexpected error in /ask: %s\n%s", e, traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+
+@app.post("/dashboard-generate")
+def generate_dashboard(request: QueryRequest):
+    log.info("[API] POST /dashboard-generate connection_id='%s'", request.connection_id)
+    
+    if not sql_agent or not connection_manager:
+        raise HTTPException(status_code=500, detail="Backend not fully initialized")
+        
+    conn_id = request.connection_id or (request.connection_ids[0] if request.connection_ids else None)
+    if not conn_id:
+        raise HTTPException(status_code=400, detail="No database connection specified")
+        
+    conn = connection_manager.get_connection(conn_id)
+    if not conn:
+        raise HTTPException(status_code=404, detail="Database connection not found")
+        
+    db_url = connection_manager.format_connection_url(conn)
+    db_type = conn.type
+    
+    try:
+        if db_type == "mongodb":
+            from mongo_database import MongoDatabaseManager
+            temp_manager = MongoDatabaseManager(db_url)
+        elif db_type == "snowflake":
+            from snowflake_database import SnowflakeDatabaseManager
+            temp_manager = SnowflakeDatabaseManager(db_url)
+        elif db_type == "elasticsearch":
+            from elasticsearch_database import ElasticsearchDatabaseManager
+            temp_manager = ElasticsearchDatabaseManager(db_url)
+        elif db_type == "neo4j":
+            from neo4j_database import Neo4jDatabaseManager
+            temp_manager = Neo4jDatabaseManager(db_url)
+        else:
+            from database import DatabaseManager
+            temp_manager = DatabaseManager(db_url)
+            
+        schema = temp_manager.get_schema()
+        
+        queries = sql_agent.generate_dashboard_queries(schema, provider=request.provider, model_name=request.model)
+        if not queries:
+            raise HTTPException(status_code=500, detail="Failed to generate dashboard queries")
+            
+        widgets = []
+        for q in queries:
+            try:
+                headers, rows = temp_manager.execute_query(q["query"])
+                if rows:
+                    widgets.append({
+                        "title": q.get("title", "Widget"),
+                        "chartType": q.get("chartType", "bar"),
+                        "tableData": {
+                            "headers": headers,
+                            "rows": rows
+                        }
+                    })
+            except Exception as ex:
+                log.warning("[API] Failed to execute dashboard query: %s\nError: %s", q["query"], ex)
+                
+        if not widgets:
+            raise HTTPException(status_code=500, detail="All dashboard queries failed to return data.")
+            
+        return {"widgets": widgets}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        log.error("[API] Error in /dashboard-generate: %s\n%s", e, traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/suggest")
 def suggest_questions(request: SuggestionRequest):
@@ -456,10 +540,18 @@ def suggest_questions(request: SuggestionRequest):
     try:
         schema = current_db_manager.get_schema()
         history_text = ""
-        for msg in request.history[-5:]:
+        # Use the last 6 messages for context; trim long AI responses to avoid noise
+        for msg in request.history[-6:]:
             role = "User" if msg.get("role") == "user" else "Assistant"
-            content = msg.get("content", "")
-            history_text += f"{role}: {content}\n"
+            content = msg.get("content", "").strip()
+            # Truncate very long assistant messages (likely raw data dumps) to 300 chars
+            if role == "Assistant" and len(content) > 300:
+                content = content[:300] + "..."
+            if content:
+                history_text += f"{role}: {content}\n"
+        
+        log.info("[API] /suggest history_text (first 500 chars): %s", history_text[:500])
+        
         suggestions = sql_agent.generate_suggestions(
             history_text,
             schema,
