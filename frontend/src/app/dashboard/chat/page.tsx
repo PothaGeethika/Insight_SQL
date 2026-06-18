@@ -52,7 +52,20 @@ import {
   Video,
   Monitor,
   MonitorOff,
+  TrendingUp,
+  Hash,
+  Layers,
+  Activity,
+  Target,
+  Sigma,
+  ClipboardCopy,
 } from "lucide-react";
+import {
+  ResponsiveContainer, BarChart, Bar, PieChart, Pie, Cell,
+  LineChart, Line, AreaChart, Area,
+  XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend,
+} from "recharts";
+import { useTheme } from "@/components/theme-provider";
 import { Input } from "@/components/ui/input";
 import {
   DropdownMenu,
@@ -79,6 +92,7 @@ import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { useState, useRef, useEffect } from "react";
+import { toast } from "sonner";
 import ReactMarkdown from 'react-markdown';
 import * as xlsx from 'xlsx';
 import * as htmlToImage from 'html-to-image';
@@ -171,7 +185,7 @@ const exportToExcel = (tableData: { headers: string[]; rows: any[][] }) => {
   xlsx.writeFile(workbook, "insight_sql_export.xlsx");
 };
 
-const exportToImage = async (ref: React.RefObject<HTMLDivElement>, format: 'png' | 'jpeg') => {
+const exportToImage = async (ref: React.RefObject<HTMLDivElement | null>, format: 'png' | 'jpeg') => {
   if (!ref.current) return;
   try {
     const dataUrl = format === 'png' 
@@ -184,7 +198,7 @@ const exportToImage = async (ref: React.RefObject<HTMLDivElement>, format: 'png'
     link.click();
   } catch (err) {
     console.error("Failed to export image", err);
-    alert("Failed to export image. Please try another format.");
+    toast.error("Failed to export image. Please try another format.");
   }
 };
 
@@ -209,15 +223,30 @@ const copyData = (tableData: { headers: string[]; rows: any[][] }) => {
   if (!tableData) return;
   const text = [tableData.headers.join("\t"), ...tableData.rows.map(r => r.join("\t"))].join("\n");
   navigator.clipboard.writeText(text);
-  alert("Data copied to clipboard!");
 };
 
 export default function ChatPage() {
+  const { resolvedTheme } = useTheme();
+  const isDark = resolvedTheme === "dark";
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   const [showSQL, setShowSQL] = useState(true);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  const [userInitials, setUserInitials] = useState("US");
+  useEffect(() => {
+    fetch("/api/auth/me")
+      .then(res => res.json())
+      .then(data => {
+        if (data.user?.name) {
+          const names = data.user.name.split(" ");
+          const initials = names.map((n: string) => n[0]).join("").toUpperCase().slice(0, 2);
+          setUserInitials(initials);
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   const exportAreaRef = useRef<HTMLDivElement>(null);
 
@@ -444,12 +473,12 @@ export default function ChatPage() {
     setIsTesting(true);
     setTestResult(null);
     try {
-      const res = await fetch("http://localhost:8000/databases/test", {
+      const res = await fetch("/api/backend/databases/test", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({ status: 'error', message: 'Internal Server Error' }));
       if (data.status === 'success') {
         setTestResult({ status: 'success', message: data.message || "Connection successful!" });
       } else {
@@ -469,8 +498,8 @@ export default function ChatPage() {
     try {
       const existing = databases.find(db => db.id === activeConfigDb?.id);
       const url = existing
-        ? `http://localhost:8000/databases/${existing.id}`
-        : "http://localhost:8000/databases";
+        ? `/api/backend/databases/${existing.id}`
+        : "/api/backend/databases";
       const method = existing ? "PUT" : "POST";
 
       const res = await fetch(url, {
@@ -480,11 +509,11 @@ export default function ChatPage() {
       });
 
       if (res.ok) {
-        const savedConn = await res.json();
+        const savedConn = await res.json().catch(() => null);
 
         // If not default/connected, set it to default/connected
         if (!savedConn.is_default) {
-          await fetch(`http://localhost:8000/databases/${savedConn.id}/default`, {
+          await fetch(`/api/backend/databases/${savedConn.id}/default`, {
             method: "PUT",
           });
         }
@@ -574,7 +603,7 @@ export default function ChatPage() {
 
   const handleConnectDbInModal = async (dbId: string) => {
     try {
-      const res = await fetch(`http://localhost:8000/databases/${dbId}/default`, {
+      const res = await fetch(`/api/backend/databases/${dbId}/default`, {
         method: "PUT",
       });
       if (res.ok) {
@@ -687,7 +716,7 @@ export default function ChatPage() {
   const fetchSuggestions = async (msgs: Message[]) => {
     setIsGeneratingSuggestions(true);
     try {
-      const response = await fetch("http://localhost:8000/suggest", {
+      const response = await fetch("/api/backend/suggest", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -698,7 +727,7 @@ export default function ChatPage() {
         }),
       });
       if (response.ok) {
-        const data = await response.json();
+        const data = await response.json().catch(() => ({}));
         if (data && data.length > 0) {
           setSuggestions(data);
           return data;
@@ -731,7 +760,7 @@ export default function ChatPage() {
         setCameraStream(stream);
       } catch (err: any) {
         console.warn("Camera permission denied or dismissed:", err.name || err);
-        alert("Could not access camera. Please check your camera permissions in browser settings.");
+        toast.error("Could not access camera. Check camera permissions in browser settings.");
         setIsCameraOpen(false);
       }
     }, 100);
@@ -1014,9 +1043,10 @@ export default function ChatPage() {
     }
 
     try {
-      const response = await fetch("http://localhost:8000/ask", {
+      const response = await fetch("/api/backend/ask", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({
           question: finalValue,
           provider: provider,
@@ -1026,7 +1056,16 @@ export default function ChatPage() {
         }),
       });
 
-      const data = await response.json();
+      let data;
+      try {
+        data = await response.json();
+      } catch (err) {
+        data = { content: `Error ${response.status}: ${await response.text().catch(() => response.statusText)}` };
+      }
+      
+      if (!response.ok && !data.content) {
+         data.content = data.detail || `Server error ${response.status}`;
+      }
 
       const assistantMsg: Message = {
         id: (messages[userMsgIndex + 1]?.id || Date.now().toString() + "-assistant"),
@@ -1241,8 +1280,8 @@ export default function ChatPage() {
 
   const fetchDatabases = async () => {
     try {
-      const response = await fetch("http://localhost:8000/databases");
-      const data = await response.json();
+      const response = await fetch("/api/backend/databases");
+      const data = await response.json().catch(() => ({}));
       if (Array.isArray(data)) {
         setDatabases(data);
         const connectedDbs = data.filter((db: any) => db.is_default);
@@ -1405,7 +1444,7 @@ export default function ChatPage() {
       recognitionRef.current.onerror = (event: any) => {
         if (event.error === "not-allowed") {
           console.warn("Speech Recognition permission denied or dismissed by user.");
-          alert("Speech recognition microphone permission was denied. Please enable microphone permissions in your browser settings to use voice query.");
+          toast.error("Microphone permission denied. Enable it in browser settings to use voice query.");
         } else {
           console.error("Speech Recognition Error:", event.error);
         }
@@ -1584,9 +1623,10 @@ export default function ChatPage() {
 
     try {
       if (input.trim() === "/dashboard") {
-        const response = await fetch("http://localhost:8000/dashboard-generate", {
+        const response = await fetch("/api/backend/dashboard-generate", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
+          credentials: "include",
           body: JSON.stringify({
             question: input,
             provider: provider,
@@ -1596,7 +1636,7 @@ export default function ChatPage() {
           }),
         });
 
-        const data = await response.json();
+        const data = await response.json().catch(() => ({ detail: "Invalid response from server" }));
         if (!response.ok) throw new Error(data.detail || "Failed to generate dashboard");
 
         const dashboardMsg: Message = {
@@ -1612,63 +1652,129 @@ export default function ChatPage() {
         return;
       }
 
-      const response = await fetch("http://localhost:8000/ask", {
+      // ── Streaming SSE approach ─────────────────────────────────────────
+      const assistantMsgId = (Date.now() + 1).toString() + "-assistant";
+      const assistantPlaceholder: Message = {
+        id: assistantMsgId,
+        role: "assistant",
+        content: "",
+        timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+      };
+      setMessages((prev) => [...prev, assistantPlaceholder]);
+
+      const streamRes = await fetch("/api/backend/ask/stream", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({
           question: input,
-          provider: provider,
-          model: model,
+          provider,
+          model,
           connection_id: effectiveDb,
-          connection_ids: selectedDbs.length > 0 ? selectedDbs : [effectiveDb]
+          connection_ids: selectedDbs.length > 0 ? selectedDbs : [effectiveDb],
         }),
       });
 
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data.detail || "Failed to get response from backend");
+      if (!streamRes.ok || !streamRes.body) {
+        const errData = await streamRes.json().catch(() => ({}));
+        throw new Error((errData as any).detail || "Streaming failed");
       }
 
-      setMessages((prev) => {
-        const updated = [...prev, data];
-        fetchSuggestions(updated);
+      const reader = streamRes.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let accContent = "";
+      let finalSql: string | undefined;
+      let finalTableData: any;
+      let finalVisualization: string | null = null;
+      let finalTimestamp = assistantPlaceholder.timestamp;
 
-        // Auto-summarize if this is the first interaction in the session
-        if (updated.length === 2) {
-          fetch("http://localhost:8000/summarize", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              question: input,
-              response: data.content,
-              provider,
-              model
-            }),
-          }).then(res => res.json())
-            .then(({ title }) => {
-              if (title) {
-                setHistory(hPrev => hPrev.map(h =>
-                  h.id === updatedSessionId ? { ...h, title } : h
-                ));
-              }
-            }).catch(e => console.error("Summarization failed:", e));
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        // SSE lines are delimited by \n\n
+        const parts = buffer.split("\n\n");
+        buffer = parts.pop() ?? "";
+
+        for (const part of parts) {
+          const line = part.trim();
+          if (!line.startsWith("data: ")) continue;
+          try {
+            const evt = JSON.parse(line.slice(6));
+
+            if (evt.type === "sql") {
+              finalSql = evt.sql;
+              finalVisualization = evt.visualization ?? null;
+              finalTimestamp = evt.timestamp ?? finalTimestamp;
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantMsgId ? { ...m, sql: evt.sql, generated_query: evt.sql, timestamp: finalTimestamp } : m
+                )
+              );
+            } else if (evt.type === "table") {
+              finalTableData = { headers: evt.headers, rows: evt.rows };
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantMsgId
+                    ? { ...m, tableData: finalTableData, visualization: finalVisualization }
+                    : m
+                )
+              );
+            } else if (evt.type === "content") {
+              accContent += evt.data;
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantMsgId ? { ...m, content: accContent } : m
+                )
+              );
+            } else if (evt.type === "done") {
+              // final assembled message
+              const finalMsg: Message = {
+                id: assistantMsgId,
+                role: "assistant",
+                content: accContent,
+                sql: finalSql,
+                generated_query: finalSql,
+                tableData: finalTableData,
+                visualization: finalVisualization,
+                timestamp: finalTimestamp,
+              };
+              setMessages((prev) => {
+                const updated = prev.map((m) => (m.id === assistantMsgId ? finalMsg : m));
+                fetchSuggestions(updated);
+                // Auto-summarize on first exchange
+                if (updated.length === 2) {
+                  fetch("/api/backend/summarize", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ question: input, response: accContent, provider, model }),
+                  })
+                    .then((r) => r.json().catch(() => ({})))
+                    .then(({ title }) => {
+                      if (title) setHistory((h) => h.map((s) => (s.id === updatedSessionId ? { ...s, title } : s)));
+                    })
+                    .catch(() => {});
+                }
+                setHistory((h) => h.map((s) => (s.id === updatedSessionId ? { ...s, messages: updated } : s)));
+                return updated;
+              });
+            } else if (evt.type === "error") {
+              throw new Error(evt.data);
+            }
+          } catch (parseErr) {
+            // skip malformed SSE line
+          }
         }
-
-        setHistory(hPrev => hPrev.map(h =>
-          h.id === updatedSessionId
-            ? { ...h, messages: updated }
-            : h
-        ));
-        return updated;
-      });
+      }
     } catch (error) {
+      const errText = error instanceof Error ? error.message : "Could not connect to backend. Make sure it's running.";
+      toast.error(errText);
       const errorMsg: Message = {
         id: (Date.now() + 1).toString(),
         role: "assistant",
-        content: `Error: ${error instanceof Error ? error.message : "Could not connect to backend. Make sure it's running."}`,
+        content: `Error: ${errText}`,
         timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
       };
       setMessages((prev) => [...prev, errorMsg]);
@@ -1680,6 +1786,7 @@ export default function ChatPage() {
   const handleCopy = (text: string, id: string) => {
     navigator.clipboard.writeText(text);
     setCopiedId(id);
+    toast.success("Copied to clipboard");
     setTimeout(() => setCopiedId(null), 2000);
   };
 
@@ -1745,7 +1852,7 @@ export default function ChatPage() {
             animate={isMobile ? { x: 0, width: 280 } : { width: historyWidth, opacity: 1 }}
             exit={isMobile ? { x: -280 } : { width: 0, opacity: 0 }}
             transition={{ duration: 0.3, ease: "easeInOut" }}
-            className={`flex border-r border-slate-200 dark:border-slate-900/50 flex-col bg-[var(--surface-0)] dark:bg-muted/10 overflow-hidden h-full ${
+            className={`flex border-r border-slate-200 dark:border-white/10 flex-col bg-[var(--surface-0)] dark:bg-black/20 dark:backdrop-blur-md overflow-hidden h-full ${
               isMobile ? "fixed inset-y-0 left-0 z-50 shadow-2xl w-[280px]" : "relative"
             }`}
           >
@@ -1931,7 +2038,7 @@ export default function ChatPage() {
           )}
         </AnimatePresence>
 
-        <div className="min-h-14 border-b flex flex-col md:flex-row md:items-center justify-between px-6 py-3 gap-3 flex-shrink-0 z-10 bg-slate-50 dark:bg-[var(--surface-0)]">
+        <div className="min-h-14 border-b border-slate-200 dark:border-white/10 flex flex-col md:flex-row md:items-center justify-between px-6 py-3 gap-3 flex-shrink-0 z-10 bg-slate-50 dark:bg-black/20 dark:backdrop-blur-md">
           <div className="flex items-center gap-3">
             {!isHistoryOpen && (
               <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setIsHistoryOpen(true)}>
@@ -2181,9 +2288,18 @@ export default function ChatPage() {
                               />
                             )
                           )}
-                          <div className={`text-sm leading-relaxed prose dark:prose-invert max-w-none ${msg.role === "user" ? "!text-white font-medium" : "text-slate-800 dark:text-slate-200"}`}>
-                            <ReactMarkdown>{msg.content}</ReactMarkdown>
-                          </div>
+                          {/* Show streaming cursor while content is being streamed */}
+                          {msg.role === "assistant" && msg.content === "" && isTyping ? (
+                            <div className="flex items-center gap-1 py-1">
+                              <span className="h-2 w-2 rounded-full bg-indigo-500 typing-dot" />
+                              <span className="h-2 w-2 rounded-full bg-indigo-500 typing-dot" />
+                              <span className="h-2 w-2 rounded-full bg-indigo-500 typing-dot" />
+                            </div>
+                          ) : (
+                            <div className={`text-sm leading-relaxed prose dark:prose-invert max-w-none ${msg.role === "user" ? "!text-white font-medium" : "text-slate-800 dark:text-slate-200"} ${msg.role === "assistant" && isTyping && msg === messages[messages.length - 1] ? "streaming-cursor" : ""}`}>
+                              <ReactMarkdown>{msg.content}</ReactMarkdown>
+                            </div>
+                          )}
                           {msg.dashboardWidgets && (
                             <AutoDashboard widgets={msg.dashboardWidgets} />
                           )}
@@ -2352,7 +2468,7 @@ export default function ChatPage() {
                           </TabsContent>
  
                           <TabsContent value="sql" className="p-4 pt-3">
-                            <pre className="text-xs font-mono bg-[#0f172a] dark:bg-black/50 text-emerald-400 rounded-lg p-4 overflow-x-auto leading-relaxed">
+                            <pre className="text-xs font-mono bg-muted dark:bg-[#0d0d14] text-emerald-600 dark:text-emerald-400 border border-border rounded-lg p-4 overflow-x-auto leading-relaxed">
                               <code>{msg.generated_query || msg.sql}</code>
                             </pre>
                           </TabsContent>
@@ -2367,7 +2483,7 @@ export default function ChatPage() {
 
                   {msg.role === "user" && (
                     <div className="h-8 w-8 rounded-full bg-gradient-to-br from-slate-200 to-slate-300 dark:from-slate-600 dark:to-slate-700 flex items-center justify-center flex-shrink-0 mt-1">
-                      <span className="text-xs font-bold">JC</span>
+                      <span className="text-xs font-bold">{userInitials}</span>
                     </div>
                   )}
                 </motion.div>
@@ -2431,23 +2547,6 @@ export default function ChatPage() {
                     </div>
                   </motion.div>
                 )}
-              </div>
-            )}
-
-            {isTyping && (
-              <div className="flex items-start gap-3 animate-pulse">
-                <Avatar className="h-10 w-10 rounded-2xl border-2 border-indigo-600/20">
-                  <AvatarFallback className="bg-gradient-to-br from-indigo-600 to-purple-600 text-white font-black text-xs">
-                    <Database className="h-5 w-5" />
-                  </AvatarFallback>
-                </Avatar>
-                <div className="bg-[var(--surface-1)] border border-slate-800 rounded-2xl rounded-tl-none px-5 py-4 shadow-2xl">
-                  <div className="flex gap-1.5">
-                    <span className="h-1.5 w-1.5 rounded-full bg-indigo-500 animate-bounce [animation-delay:-0.3s]" />
-                    <span className="h-1.5 w-1.5 rounded-full bg-indigo-500 animate-bounce [animation-delay:-0.15s]" />
-                    <span className="h-1.5 w-1.5 rounded-full bg-indigo-500 animate-bounce" />
-                  </div>
-                </div>
               </div>
             )}
             <div ref={messagesEndRef} />
@@ -2666,122 +2765,386 @@ export default function ChatPage() {
                 </div>
               </div>
 
-              {/* Dynamic Results Display */}
-              {!hasResults ? (
-                <div className="flex flex-col items-center justify-center h-full text-slate-500 space-y-6 pt-20">
-                  <div className="h-24 w-24 rounded-full bg-slate-900/30 flex items-center justify-center border border-slate-800 shadow-inner">
-                    <Database className="h-10 w-10 opacity-40 text-slate-400" />
-                  </div>
-                  <div className="text-center space-y-2">
-                    <h3 className="text-lg font-black text-slate-900 dark:text-white">No Tabular Data</h3>
-                    <p className="text-sm max-w-xs leading-relaxed">The selected response does not contain any structured database results to visualize.</p>
-                  </div>
-                </div>
-              ) : useStatsCard ? (
-                <Card className="bg-gradient-to-br from-indigo-900/40 via-purple-900/40 to-indigo-900/40 border border-indigo-500/20 shadow-2xl overflow-hidden rounded-[32px] relative group border-none">
-                  <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-20 pointer-events-none" />
-                  <CardContent className="p-8">
-                    <div className="flex items-center gap-6 relative z-10">
-                      <div className="h-16 w-16 rounded-[28px] bg-white/10 backdrop-blur-xl flex items-center justify-center shadow-2xl border border-white/20">
-                        <Sparkles className="h-8 w-8 text-white" />
+              {/* ──────────── Enterprise Dynamic Results Dashboard ──────────── */}
+              {(() => {
+                if (!hasResults) {
+                  return (
+                    <div className="flex flex-col items-center justify-center h-full text-slate-500 space-y-6 pt-20">
+                      <div className="h-24 w-24 rounded-full bg-slate-100 dark:bg-slate-900/30 flex items-center justify-center border border-slate-200 dark:border-slate-800 shadow-inner">
+                        <Database className="h-10 w-10 opacity-40 text-slate-400" />
                       </div>
-                      <div className="flex-1 overflow-hidden">
-                        <p className="text-sm font-bold text-indigo-300 uppercase tracking-widest mb-1 truncate" title={resultColumns[0]}>{resultColumns[0]}</p>
-                        <div className="flex items-baseline gap-4">
-                          <span className="text-5xl font-black tracking-tight text-white truncate max-w-full" title={String(resultsData[0][resultColumns[0]])}>
-                            {String(resultsData[0][resultColumns[0]])}
-                          </span>
-                        </div>
-                        <p className="text-sm text-indigo-200/60 mt-2 font-bold uppercase tracking-widest">Aggregated Result</p>
+                      <div className="text-center space-y-2">
+                        <h3 className="text-lg font-black text-slate-900 dark:text-white">No Tabular Data</h3>
+                        <p className="text-sm max-w-xs leading-relaxed">The selected response does not contain any structured database results to visualize.</p>
                       </div>
                     </div>
-                  </CardContent>
-                </Card>
-              ) : useBullets ? (
-                <Card className="p-8 bg-[var(--surface-1)] border-slate-900/50 shadow-2xl rounded-[28px] border-none">
-                  <h3 className="text-sm font-black text-slate-900 dark:text-white uppercase tracking-widest mb-6 border-b border-slate-200 dark:border-slate-800/50 pb-4">
-                    {isObjectRow ? resultColumns[0] : "Items"} List
-                  </h3>
-                  <ul className="space-y-4 max-h-[60vh] overflow-y-auto pr-4 custom-scrollbar">
-                    {resultsData.map((row: any, i: number) => {
-                      const val = isObjectRow ? row[resultColumns[0]] : row;
-                      return (
-                        <li key={i} className="flex items-center gap-4 text-sm text-slate-700 dark:text-slate-300 font-medium p-3 bg-slate-900/5 dark:bg-slate-900/30 rounded-xl border border-slate-200 dark:border-white/5 hover:border-indigo-500/30 transition-colors">
-                          <div className="h-2 w-2 rounded-full bg-indigo-500 shadow-[0_0_8px_var(--color-indigo-500)] flex-shrink-0" />
-                          <span className="break-all">{renderCell(val)}</span>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                </Card>
-              ) : (
-                <Card ref={exportAreaRef} className="bg-[var(--surface-1)] border-slate-900/50 shadow-2xl rounded-[28px] overflow-hidden border-none flex flex-col h-full max-h-[80vh] w-full max-w-full min-w-0 bg-white dark:bg-slate-950">
-                  <div className="flex items-center justify-between px-8 py-5 border-b border-slate-800/50 flex-shrink-0">
-                    <h3 className="text-sm font-black text-slate-900 dark:text-white uppercase tracking-widest">Query Results</h3>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger className="inline-flex items-center justify-center h-8 text-[11px] font-black gap-2 px-4 text-slate-400 hover:text-white bg-[var(--surface-2)] border border-slate-800 rounded-xl cursor-pointer hover:bg-slate-800/50 transition-colors focus:outline-none">
-                        <Download className="h-4 w-4" />
-                        Export
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end" className="w-48 bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-900 dark:text-white shadow-2xl rounded-xl z-[100] p-1.5">
-                        <DropdownMenuItem onClick={() => { if (activeResult?.tableData) exportToCSV(activeResult.tableData); }} className="cursor-pointer text-xs flex items-center gap-2.5 py-2 px-3 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 focus:bg-slate-100 dark:focus:bg-slate-800">
-                          <Download className="h-4 w-4 text-emerald-500" />
-                          <span>Export as CSV</span>
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => { if (activeResult?.tableData) exportToExcel(activeResult.tableData); }} className="cursor-pointer text-xs flex items-center gap-2.5 py-2 px-3 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 focus:bg-slate-100 dark:focus:bg-slate-800">
-                          <FileSpreadsheet className="h-4 w-4 text-emerald-400" />
-                          <span>Export as Excel</span>
-                        </DropdownMenuItem>
-                        <DropdownMenuSeparator className="bg-slate-200 dark:bg-slate-800/50" />
-                        <DropdownMenuItem onClick={() => exportToImage(exportAreaRef, 'png')} className="cursor-pointer text-xs flex items-center gap-2.5 py-2 px-3 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 focus:bg-slate-100 dark:focus:bg-slate-800">
-                          <ImageIcon className="h-4 w-4 text-blue-400" />
-                          <span>Download PNG Image</span>
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => exportToImage(exportAreaRef, 'jpeg')} className="cursor-pointer text-xs flex items-center gap-2.5 py-2 px-3 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 focus:bg-slate-100 dark:focus:bg-slate-800">
-                          <ImageIcon className="h-4 w-4 text-indigo-400" />
-                          <span>Download JPG Image</span>
-                        </DropdownMenuItem>
-                        <DropdownMenuSeparator className="bg-slate-200 dark:bg-slate-800/50" />
-                        <DropdownMenuItem onClick={() => { if (activeResult?.tableData) shareToMail(activeResult.tableData); }} className="cursor-pointer text-xs flex items-center gap-2.5 py-2 px-3 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 focus:bg-slate-100 dark:focus:bg-slate-800">
-                          <Mail className="h-4 w-4 text-amber-400" />
-                          <span>Share via Email</span>
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => { if (activeResult?.tableData) copyData(activeResult.tableData); }} className="cursor-pointer text-xs flex items-center gap-2.5 py-2 px-3 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 focus:bg-slate-100 dark:focus:bg-slate-800">
-                          <LinkIcon className="h-4 w-4 text-purple-400" />
-                          <span>Copy Raw Data</span>
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </div>
-                  <div className="overflow-x-auto flex-1 custom-scrollbar">
-                    <table className="w-full text-xs">
-                      <thead className="sticky top-0 bg-[var(--surface-1)] z-10 shadow-sm shadow-black/20">
-                        <tr className="bg-slate-100 dark:bg-slate-900/20 text-slate-600 dark:text-slate-500 uppercase tracking-[0.15em] text-[10px] font-black">
-                          {resultColumns.map((col, i) => (
-                            <th key={i} className="text-left px-8 py-5 whitespace-nowrap">{col}</th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-800/30">
-                        {resultsData.map((row: any, i: number) => (
-                          <tr key={i} className="hover:bg-white/5 transition-colors cursor-pointer group">
-                            {resultColumns.map((col, j) => (
-                              <td key={j} className="px-8 py-5 text-slate-700 dark:text-slate-300 font-medium whitespace-nowrap max-w-[300px] truncate" title={String(row[col])}>
-                                {renderCell(row[col])}
-                              </td>
-                            ))}
-                          </tr>
+                  );
+                }
+
+                // ── Dynamic data analysis ──
+                const numericCols = resultColumns.filter(col => {
+                  const sample = resultsData.slice(0, 5);
+                  return sample.some((row: any) => {
+                    const v = row[col];
+                    return v !== null && v !== undefined && v !== '' && !isNaN(Number(v));
+                  });
+                }).filter(c => c !== "SOURCE_DATABASE");
+
+                const stringCols = resultColumns.filter(col => {
+                  const sample = resultsData.slice(0, 5);
+                  return sample.some((row: any) => typeof row[col] === 'string' && isNaN(Number(row[col])));
+                }).filter(c => c !== "SOURCE_DATABASE");
+
+                // ── KPI card computation ──
+                const kpiCards = numericCols.slice(0, 4).map((col, idx) => {
+                  const values = resultsData.map((r: any) => Number(r[col])).filter((v: number) => !isNaN(v));
+                  const sum = values.reduce((a: number, b: number) => a + b, 0);
+                  const avg = values.length > 0 ? sum / values.length : 0;
+                  const max = values.length > 0 ? Math.max(...values) : 0;
+                  const min = values.length > 0 ? Math.min(...values) : 0;
+
+                  // Pick the best single value to display
+                  let displayValue = sum;
+                  let displayLabel = "Total";
+                  if (resultsData.length === 1) {
+                    displayValue = values[0] ?? 0;
+                    displayLabel = "Value";
+                  } else if (col.toLowerCase().includes("avg") || col.toLowerCase().includes("average") || col.toLowerCase().includes("mean")) {
+                    displayValue = avg;
+                    displayLabel = "Average";
+                  } else if (col.toLowerCase().includes("count") || col.toLowerCase().includes("total") || col.toLowerCase().includes("sum")) {
+                    displayValue = sum;
+                    displayLabel = "Total";
+                  } else if (col.toLowerCase().includes("max") || col.toLowerCase().includes("min")) {
+                    displayValue = col.toLowerCase().includes("max") ? max : min;
+                    displayLabel = col.toLowerCase().includes("max") ? "Maximum" : "Minimum";
+                  }
+
+                  const icons = [TrendingUp, Activity, Target, Layers];
+                  const gradients = [
+                    "from-indigo-500/15 to-indigo-600/5 dark:from-indigo-500/20 dark:to-indigo-600/5",
+                    "from-emerald-500/15 to-emerald-600/5 dark:from-emerald-500/20 dark:to-emerald-600/5",
+                    "from-amber-500/15 to-amber-600/5 dark:from-amber-500/20 dark:to-amber-600/5",
+                    "from-purple-500/15 to-purple-600/5 dark:from-purple-500/20 dark:to-purple-600/5",
+                  ];
+                  const iconColors = [
+                    "text-indigo-600 dark:text-indigo-400",
+                    "text-emerald-600 dark:text-emerald-400",
+                    "text-amber-600 dark:text-amber-400",
+                    "text-purple-600 dark:text-purple-400",
+                  ];
+                  const Icon = icons[idx % icons.length];
+
+                  return { col, displayValue, displayLabel, Icon, gradient: gradients[idx % gradients.length], iconColor: iconColors[idx % iconColors.length] };
+                });
+
+                // ── Chart data preparation ──
+                const chartXKey = stringCols[0] || resultColumns.find(c => c !== "SOURCE_DATABASE") || resultColumns[0];
+                const chartYKeys = numericCols.filter(c => c !== chartXKey);
+                const hasChartData = chartYKeys.length > 0 && resultsData.length > 1;
+
+                const chartData = hasChartData ? resultsData.map((row: any) => {
+                  const obj: any = {};
+                  obj[chartXKey] = row[chartXKey];
+                  chartYKeys.forEach(k => { obj[k] = Number(row[k]) || 0; });
+                  return obj;
+                }) : [];
+
+                // Auto-detect chart type
+                let autoChartType: "bar" | "pie" | "line" = "bar";
+                if (chartData.length > 20) autoChartType = "line";
+                else if (chartYKeys.length === 1 && chartData.length <= 10) autoChartType = "pie";
+
+                const CHART_COLORS = ["#6366f1", "#8b5cf6", "#ec4899", "#06b6d4", "#10b981", "#f59e0b", "#ef4444", "#14b8a6"];
+
+                // Recharts theme tokens
+                const rAxisStroke   = isDark ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.10)";
+                const rTickFill     = isDark ? "rgba(255,255,255,0.45)" : "rgba(0,0,0,0.50)";
+                const rGridStroke   = isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.06)";
+                const rTooltipBg   = isDark ? "rgba(15,23,42,0.96)"    : "rgba(255,255,255,0.98)";
+                const rTooltipBdr  = isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.10)";
+                const rTooltipHead = isDark ? "#e2e8f0" : "#0f172a";
+                const rTooltipText = isDark ? "#94a3b8" : "#475569";
+
+                const InlineTooltip = ({ active, payload, label }: any) => {
+                  if (!active || !payload?.length) return null;
+                  return (
+                    <div style={{
+                      background: rTooltipBg, border: `1px solid ${rTooltipBdr}`,
+                      borderRadius: 12, padding: "10px 14px",
+                      boxShadow: "0 8px 32px rgba(0,0,0,0.18)", backdropFilter: "blur(12px)",
+                    }}>
+                      <p style={{ fontWeight: 700, color: rTooltipHead, marginBottom: 6, fontSize: 12 }}>{label}</p>
+                      {payload.map((entry: any, i: number) => (
+                        <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11 }}>
+                          <div style={{ width: 8, height: 8, borderRadius: "50%", background: entry.color, flexShrink: 0 }} />
+                          <span style={{ color: rTooltipText }}>{entry.name}:</span>
+                          <span style={{ fontWeight: 700, color: rTooltipHead, fontVariantNumeric: "tabular-nums" }}>
+                            {typeof entry.value === "number" ? entry.value.toLocaleString() : entry.value}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                };
+
+                // Format numbers smartly
+                const formatNum = (n: number) => {
+                  if (n >= 1e9) return `${(n / 1e9).toFixed(1)}B`;
+                  if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M`;
+                  if (n >= 1e3) return `${(n / 1e3).toFixed(1)}K`;
+                  if (Number.isInteger(n)) return n.toLocaleString();
+                  return n.toFixed(2);
+                };
+
+                // Visible columns for the table (exclude SOURCE_DATABASE)
+                const visibleColumns = resultColumns.filter(c => c !== "SOURCE_DATABASE");
+
+                // ── Compute totals row ──
+                const totalsRow: Record<string, string | number> = {};
+                visibleColumns.forEach(col => {
+                  if (numericCols.includes(col)) {
+                    totalsRow[col] = resultsData.reduce((sum: number, row: any) => sum + (Number(row[col]) || 0), 0);
+                  } else {
+                    totalsRow[col] = "";
+                  }
+                });
+                if (visibleColumns.length > 0 && !numericCols.includes(visibleColumns[0])) {
+                  totalsRow[visibleColumns[0]] = "Total";
+                }
+
+                return (
+                  <div ref={exportAreaRef} className="space-y-5 flex-1">
+                    {/* ── Header Bar ── */}
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-lg font-black text-slate-900 dark:text-white tracking-tight">Results</h3>
+                      <div className="flex items-center gap-2">
+                        <DropdownMenu>
+                          <DropdownMenuTrigger className="inline-flex items-center justify-center h-8 text-[11px] font-bold gap-2 px-3.5 text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white bg-white dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg cursor-pointer hover:border-slate-300 dark:hover:border-slate-600 transition-all focus:outline-none shadow-sm">
+                            <Download className="h-3.5 w-3.5" />
+                            Export
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end" className="w-48 bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-900 dark:text-white shadow-2xl rounded-xl z-[100] p-1.5">
+                            <DropdownMenuItem onClick={() => { if (activeResult?.tableData) exportToCSV(activeResult.tableData); }} className="cursor-pointer text-xs flex items-center gap-2.5 py-2 px-3 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 focus:bg-slate-100 dark:focus:bg-slate-800">
+                              <Download className="h-4 w-4 text-emerald-500" />
+                              <span>Export as CSV</span>
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => { if (activeResult?.tableData) exportToExcel(activeResult.tableData); }} className="cursor-pointer text-xs flex items-center gap-2.5 py-2 px-3 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 focus:bg-slate-100 dark:focus:bg-slate-800">
+                              <FileSpreadsheet className="h-4 w-4 text-emerald-400" />
+                              <span>Export as Excel</span>
+                            </DropdownMenuItem>
+                            <DropdownMenuSeparator className="bg-slate-200 dark:bg-slate-800/50" />
+                            <DropdownMenuItem onClick={() => exportToImage(exportAreaRef, 'png')} className="cursor-pointer text-xs flex items-center gap-2.5 py-2 px-3 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 focus:bg-slate-100 dark:focus:bg-slate-800">
+                              <ImageIcon className="h-4 w-4 text-blue-400" />
+                              <span>Download PNG Image</span>
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => exportToImage(exportAreaRef, 'jpeg')} className="cursor-pointer text-xs flex items-center gap-2.5 py-2 px-3 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 focus:bg-slate-100 dark:focus:bg-slate-800">
+                              <ImageIcon className="h-4 w-4 text-indigo-400" />
+                              <span>Download JPG Image</span>
+                            </DropdownMenuItem>
+                            <DropdownMenuSeparator className="bg-slate-200 dark:bg-slate-800/50" />
+                            <DropdownMenuItem onClick={() => { if (activeResult?.tableData) shareToMail(activeResult.tableData); }} className="cursor-pointer text-xs flex items-center gap-2.5 py-2 px-3 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 focus:bg-slate-100 dark:focus:bg-slate-800">
+                              <Mail className="h-4 w-4 text-amber-400" />
+                              <span>Share via Email</span>
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => { if (activeResult?.tableData) copyData(activeResult.tableData); }} className="cursor-pointer text-xs flex items-center gap-2.5 py-2 px-3 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 focus:bg-slate-100 dark:focus:bg-slate-800">
+                              <LinkIcon className="h-4 w-4 text-purple-400" />
+                              <span>Copy Raw Data</span>
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </div>
+                    </div>
+
+                    {/* ── KPI Stat Cards ── */}
+                    {kpiCards.length > 0 && (
+                      <div className={`grid gap-3 ${kpiCards.length === 1 ? "grid-cols-1" : kpiCards.length === 2 ? "grid-cols-2" : kpiCards.length === 3 ? "grid-cols-3" : "grid-cols-2 xl:grid-cols-4"}`}>
+                        {kpiCards.map((kpi, idx) => (
+                          <motion.div
+                            key={kpi.col}
+                            initial={{ opacity: 0, y: 12 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            transition={{ delay: idx * 0.08, duration: 0.35, ease: "easeOut" }}
+                            className={`relative overflow-hidden rounded-xl border border-slate-200 dark:border-slate-700/50 bg-gradient-to-br ${kpi.gradient} p-4 shadow-sm`}
+                          >
+                            <div className="flex items-start justify-between">
+                              <div className="flex-1 min-w-0">
+                                <p className="text-[10px] font-bold uppercase tracking-widest text-slate-500 dark:text-slate-400 truncate mb-1.5" title={kpi.col}>
+                                  {kpi.col.replace(/_/g, " ")}
+                                </p>
+                                <p className="text-2xl font-black text-slate-900 dark:text-white tracking-tight tabular-nums truncate" title={String(kpi.displayValue)}>
+                                  {formatNum(kpi.displayValue)}
+                                </p>
+                                <p className="text-[10px] font-semibold text-slate-400 dark:text-slate-500 mt-1 uppercase tracking-wider">
+                                  {kpi.displayLabel}
+                                </p>
+                              </div>
+                              <div className={`h-9 w-9 rounded-xl bg-white/60 dark:bg-white/10 flex items-center justify-center flex-shrink-0 ${kpi.iconColor}`}>
+                                <kpi.Icon className="h-4.5 w-4.5" />
+                              </div>
+                            </div>
+                          </motion.div>
                         ))}
-                      </tbody>
-                    </table>
+                      </div>
+                    )}
+
+                    {/* ── Chart + Table Grid ── */}
+                    <div className={hasChartData ? "grid grid-cols-1 xl:grid-cols-2 gap-4" : ""}>
+                      {/* ── Data Table ── */}
+                      <motion.div
+                        initial={{ opacity: 0, y: 12 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ delay: 0.15, duration: 0.35 }}
+                        className="rounded-xl border border-slate-200 dark:border-slate-700/50 bg-white dark:bg-slate-900/60 shadow-sm overflow-hidden"
+                      >
+                        <div className="px-4 py-3 border-b border-slate-100 dark:border-slate-800/60">
+                          <h4 className="text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-widest flex items-center gap-2">
+                            <TableIcon className="h-3.5 w-3.5 text-slate-400" />
+                            Data Table
+                          </h4>
+                        </div>
+                        <div className="overflow-auto max-h-[360px] custom-scrollbar">
+                          <table className="w-full text-xs">
+                            <thead className="sticky top-0 z-10">
+                              <tr className="bg-slate-50 dark:bg-slate-800/80 text-slate-500 dark:text-slate-400 uppercase tracking-wider text-[10px] font-bold">
+                                {visibleColumns.map((col, i) => (
+                                  <th key={i} className="text-left px-4 py-3 whitespace-nowrap border-b border-slate-200 dark:border-slate-700/50">
+                                    {col.replace(/_/g, " ")}
+                                  </th>
+                                ))}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {resultsData.map((row: any, i: number) => (
+                                <tr
+                                  key={i}
+                                  className={`transition-colors hover:bg-indigo-50/50 dark:hover:bg-indigo-500/5 ${
+                                    i % 2 === 0 ? "bg-white dark:bg-transparent" : "bg-slate-50/60 dark:bg-slate-800/20"
+                                  }`}
+                                >
+                                  {visibleColumns.map((col, j) => (
+                                    <td
+                                      key={j}
+                                      className="px-4 py-2.5 text-slate-700 dark:text-slate-300 font-medium whitespace-nowrap max-w-[180px] truncate border-b border-slate-100 dark:border-slate-800/30"
+                                      title={String(row[col] ?? "")}
+                                    >
+                                      {renderCell(row[col])}
+                                    </td>
+                                  ))}
+                                </tr>
+                              ))}
+                              {/* Totals Row */}
+                              {numericCols.length > 0 && resultsData.length > 1 && (
+                                <tr className="bg-slate-100 dark:bg-slate-800/50 font-black sticky bottom-0">
+                                  {visibleColumns.map((col, j) => (
+                                    <td
+                                      key={j}
+                                      className="px-4 py-3 text-slate-900 dark:text-white whitespace-nowrap border-t-2 border-slate-200 dark:border-slate-700 text-xs"
+                                    >
+                                      {totalsRow[col] !== "" ? (typeof totalsRow[col] === "number" ? formatNum(totalsRow[col] as number) : totalsRow[col]) : ""}
+                                    </td>
+                                  ))}
+                                </tr>
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                      </motion.div>
+
+                      {/* ── Auto-Detected Chart ── */}
+                      {hasChartData && (
+                        <motion.div
+                          initial={{ opacity: 0, y: 12 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          transition={{ delay: 0.25, duration: 0.35 }}
+                          className="rounded-xl border border-slate-200 dark:border-slate-700/50 bg-white dark:bg-slate-900/60 shadow-sm overflow-hidden flex flex-col"
+                        >
+                          <div className="px-4 py-3 border-b border-slate-100 dark:border-slate-800/60 flex items-center justify-between">
+                            <h4 className="text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-widest flex items-center gap-2">
+                              <BarChart3 className="h-3.5 w-3.5 text-slate-400" />
+                              {chartXKey.replace(/_/g, " ")} ({autoChartType === "pie" ? "Distribution" : autoChartType === "line" ? "Trend" : "Comparison"})
+                            </h4>
+                          </div>
+                          <div className="p-4 flex-1 min-h-[280px]">
+                            <ResponsiveContainer width="100%" height="100%">
+                              {autoChartType === "pie" ? (
+                                <PieChart>
+                                  <Pie
+                                    data={chartData}
+                                    dataKey={chartYKeys[0]}
+                                    nameKey={chartXKey}
+                                    cx="50%"
+                                    cy="50%"
+                                    outerRadius="80%"
+                                    innerRadius="50%"
+                                    paddingAngle={3}
+                                    stroke="none"
+                                    label={({ name, percent }: any) => (percent ?? 0) > 0.05 ? `${name} ${((percent ?? 0) * 100).toFixed(0)}%` : null}
+                                    labelLine={false}
+                                  >
+                                    {chartData.map((_: any, index: number) => (
+                                      <Cell key={`cell-${index}`} fill={CHART_COLORS[index % CHART_COLORS.length]} />
+                                    ))}
+                                  </Pie>
+                                  <RechartsTooltip content={<InlineTooltip />} />
+                                  <Legend wrapperStyle={{ fontSize: 11, paddingTop: 8 }} />
+                                </PieChart>
+                              ) : autoChartType === "line" ? (
+                                <LineChart data={chartData} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
+                                  <CartesianGrid strokeDasharray="3 3" stroke={rGridStroke} vertical={false} />
+                                  <XAxis dataKey={chartXKey} stroke={rAxisStroke} tick={{ fill: rTickFill, fontSize: 10 }} tickMargin={8} />
+                                  <YAxis stroke={rAxisStroke} tick={{ fill: rTickFill, fontSize: 10 }} />
+                                  <RechartsTooltip content={<InlineTooltip />} />
+                                  <Legend wrapperStyle={{ fontSize: 11, paddingTop: 8 }} />
+                                  {chartYKeys.map((key, idx) => (
+                                    <Line key={key} type="monotone" dataKey={key} stroke={CHART_COLORS[idx % CHART_COLORS.length]} strokeWidth={2.5} dot={{ r: 3, fill: isDark ? "#0f172a" : "#ffffff", strokeWidth: 2 }} activeDot={{ r: 5, strokeWidth: 0 }} />
+                                  ))}
+                                </LineChart>
+                              ) : (
+                                <BarChart data={chartData} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
+                                  <CartesianGrid strokeDasharray="3 3" stroke={rGridStroke} vertical={false} />
+                                  <XAxis dataKey={chartXKey} stroke={rAxisStroke} tick={{ fill: rTickFill, fontSize: 10 }} tickMargin={8} />
+                                  <YAxis stroke={rAxisStroke} tick={{ fill: rTickFill, fontSize: 10 }} />
+                                  <RechartsTooltip content={<InlineTooltip />} cursor={{ fill: isDark ? "rgba(99,102,241,0.06)" : "rgba(99,102,241,0.04)" }} />
+                                  <Legend wrapperStyle={{ fontSize: 11, paddingTop: 8 }} />
+                                  {chartYKeys.map((key, idx) => (
+                                    <Bar key={key} dataKey={key} fill={CHART_COLORS[idx % CHART_COLORS.length]} radius={[4, 4, 0, 0]} />
+                                  ))}
+                                </BarChart>
+                              )}
+                            </ResponsiveContainer>
+                          </div>
+                        </motion.div>
+                      )}
+                    </div>
+
+                    {/* ── Footer Bar ── */}
+                    <div className="flex items-center justify-between pt-2 border-t border-slate-200 dark:border-slate-800/50">
+                      <span className="text-[11px] text-slate-400 dark:text-slate-500 font-semibold">
+                        Showing {resultsData.length} record{resultsData.length !== 1 ? "s" : ""}
+                      </span>
+                      <div className="flex items-center gap-2">
+                        {activeResult?.sql && (
+                          <button
+                            onClick={() => { navigator.clipboard.writeText(activeResult.sql || ""); toast.success("SQL copied!"); }}
+                            className="inline-flex items-center gap-1.5 text-[11px] font-bold text-slate-400 dark:text-slate-500 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors px-2.5 py-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800/50"
+                          >
+                            <Code className="h-3.5 w-3.5" />
+                            SQL
+                          </button>
+                        )}
+                        <button
+                          onClick={() => { if (activeResult?.tableData) copyData(activeResult.tableData); }}
+                          className="inline-flex items-center gap-1.5 text-[11px] font-bold text-slate-400 dark:text-slate-500 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors px-2.5 py-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800/50"
+                        >
+                          <ClipboardCopy className="h-3.5 w-3.5" />
+                          Copy Results
+                        </button>
+                      </div>
+                    </div>
                   </div>
-                  <div className="flex items-center justify-between px-8 py-6 border-t border-slate-800/50 flex-shrink-0 bg-slate-900/10">
-                    <span className="text-[11px] text-slate-500 font-black uppercase tracking-wider">
-                      Showing {resultsData.length} records
-                    </span>
-                  </div>
-                </Card>
-              )}
+                );
+              })()}
             </div>
           </motion.div>
         )}

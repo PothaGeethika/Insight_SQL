@@ -3,6 +3,7 @@ import { Inter } from "next/font/google";
 import { Geist_Mono } from "next/font/google";
 import { ThemeProvider } from "@/components/theme-provider";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { Toaster } from "sonner";
 import "./globals.css";
 
 const inter = Inter({
@@ -33,9 +34,9 @@ export default function RootLayout({
       lang="en"
       suppressHydrationWarning
       data-scroll-behavior="smooth"
-      className={`dark ${inter.variable} ${geistMono.variable} h-full antialiased`}
+      className={`${inter.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body 
+      <body
         suppressHydrationWarning
         className="min-h-full flex flex-col"
       >
@@ -43,10 +44,16 @@ export default function RootLayout({
           attribute="class"
           defaultTheme="dark"
           enableSystem
-          enableColorScheme={false}
+          disableTransitionOnChange
         >
           <TooltipProvider delay={200}>
             {children}
+            <Toaster
+              position="bottom-right"
+              richColors
+              closeButton
+              toastOptions={{ duration: 4000 }}
+            />
           </TooltipProvider>
         </ThemeProvider>
       </body>

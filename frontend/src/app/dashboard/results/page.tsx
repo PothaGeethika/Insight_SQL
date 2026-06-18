@@ -340,7 +340,7 @@ export default function ResultsPage() {
         <TabsContent value="sql">
           <Card>
             <CardContent className="p-5">
-              <pre className="text-sm font-mono bg-[#0f172a] text-emerald-400 rounded-xl p-6 overflow-x-auto leading-relaxed">
+              <pre className="text-sm font-mono bg-muted dark:bg-[#0d0d14] text-emerald-600 dark:text-emerald-400 rounded-xl p-6 overflow-x-auto leading-relaxed border border-border">
                 <code>{`SELECT
   order_id,
   customer_id,

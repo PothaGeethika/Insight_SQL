@@ -1,17 +1,7 @@
 "use client";
 
 import { motion, AnimatePresence } from "framer-motion";
-import {
-  Database,
-  Eye,
-  EyeOff,
-  Mail,
-  Lock,
-  ArrowLeft,
-  Loader2,
-  ShieldCheck,
-  KeyRound,
-} from "lucide-react";
+import { Database, Eye, EyeOff, Mail, Lock, ArrowLeft, Loader2, ShieldCheck, KeyRound, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -30,7 +20,6 @@ export default function ForgotPasswordPage() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
 
-  // Redirect to dashboard if already authenticated
   useEffect(() => {
     fetch("/api/auth/me").then((res) => {
       if (res.ok) window.location.href = "/dashboard";
@@ -50,7 +39,7 @@ export default function ForgotPasswordPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Request failed");
       setStep(2);
-      setSuccess("Account found! Please set your new password.");
+      setSuccess("Account found! Set your new password below.");
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -60,10 +49,7 @@ export default function ForgotPasswordPage() {
 
   const handleResetPassword = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (newPassword !== confirmPassword) {
-      setError("Passwords do not match");
-      return;
-    }
+    if (newPassword !== confirmPassword) { setError("Passwords do not match"); return; }
     setIsLoading(true);
     setError("");
     try {
@@ -74,10 +60,8 @@ export default function ForgotPasswordPage() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Reset failed");
-      setSuccess("Password reset successfully! Redirecting to login...");
-      setTimeout(() => {
-        window.location.href = "/login";
-      }, 2000);
+      setSuccess("Password reset! Redirecting to login…");
+      setTimeout(() => { window.location.href = "/login"; }, 2000);
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -86,274 +70,213 @@ export default function ForgotPasswordPage() {
   };
 
   return (
-    <div className="min-h-screen flex">
-      {/* Left side - Branding (dark themed side panel) */}
-      <motion.div
-        initial={{ opacity: 0, x: -50 }}
-        animate={{ opacity: 1, x: 0 }}
-        transition={{ duration: 0.6 }}
-        className="hidden lg:flex lg:w-[45%] bg-gradient-to-br from-[#0a0e1a] via-[#111827] to-[#0f172a] text-white flex-col justify-between p-12 relative overflow-hidden"
-      >
-        {/* Background decorations */}
-        <div className="absolute inset-0 overflow-hidden pointer-events-none">
-          <div className="absolute top-1/4 -right-20 w-80 h-80 bg-blue-600/10 rounded-full blur-3xl" />
-          <div className="absolute -bottom-20 -left-10 w-60 h-60 bg-purple-600/10 rounded-full blur-3xl" />
-          <div className="absolute top-1/2 left-1/3 w-40 h-40 bg-cyan-600/5 rounded-full blur-3xl" />
+    <div className="min-h-screen flex bg-background">
+
+      {/* ── Left panel — always dark ─────────────────────────────── */}
+      <div className="dark hidden lg:flex lg:w-[48%] xl:w-[44%] flex-col bg-[#09090f] relative overflow-hidden">
+
+        <div className="absolute inset-0 pointer-events-none">
+          <div className="absolute top-0 left-0 w-96 h-96 bg-indigo-600/15 rounded-full blur-[100px]" />
+          <div className="absolute bottom-0 right-0 w-80 h-80 bg-violet-600/15 rounded-full blur-[80px]" />
         </div>
 
-        <div className="relative z-10">
-          <Link href="/" className="flex items-center gap-2.5">
-            <div className="h-10 w-10 rounded-xl bg-gradient-to-br from-blue-500 to-blue-700 flex items-center justify-center shadow-lg shadow-blue-500/30">
-              <Database className="h-5 w-5 text-white" />
+        <div className="absolute inset-0 opacity-[0.025]"
+          style={{
+            backgroundImage: "linear-gradient(rgba(255,255,255,0.8) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.8) 1px, transparent 1px)",
+            backgroundSize: "48px 48px",
+          }}
+        />
+
+        <div className="relative z-10 flex flex-col h-full p-10 xl:p-12">
+          <Link href="/" className="flex items-center gap-3 w-fit">
+            <div className="h-9 w-9 rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center shadow-lg shadow-indigo-500/30">
+              <Database className="h-4.5 w-4.5 text-white" />
             </div>
-            <span className="text-xl font-bold">InsightSQL</span>
+            <span className="text-xl font-bold text-white tracking-tight">InsightSQL</span>
           </Link>
-        </div>
 
-        <div className="relative z-10 space-y-6">
-          <h2 className="text-4xl font-bold leading-tight">
-            Don&apos;t worry.
-            <br />
-            We&apos;ll help you
-            <br />
-            <span className="text-blue-400">recover your account.</span>
-          </h2>
-          <p className="text-slate-400 text-lg max-w-md">
-            It happens to the best of us. Reset your password in just a few simple steps and get back to querying.
-          </p>
-        </div>
+          <div className="flex-1 flex flex-col justify-center space-y-6 mt-16">
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.6, ease: [0.22, 1, 0.36, 1] }}
+              className="space-y-4"
+            >
+              <h1 className="text-4xl xl:text-5xl font-black text-white leading-[1.1] tracking-tight">
+                Don&apos;t worry.
+                <br />
+                <span className="bg-gradient-to-r from-indigo-400 to-violet-400 bg-clip-text text-transparent">
+                  We&apos;ve got you
+                </span>
+                <br />
+                covered.
+              </h1>
+              <p className="text-slate-400 text-base leading-relaxed max-w-sm">
+                Reset your password in seconds and get back to querying your databases.
+              </p>
+            </motion.div>
 
-        <div className="relative z-10 text-sm text-slate-500">
-          © 2025 InsightSQL. All rights reserved.
-        </div>
-      </motion.div>
-
-      {/* Right side - Forgot password form */}
-      <div className="flex-1 flex items-center justify-center p-6 sm:p-12 gradient-bg relative">
-        <div className="absolute top-6 right-6">
-          <ThemeToggle />
-        </div>
-
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.5, delay: 0.2 }}
-          className="w-full max-w-md"
-        >
-          {/* Mobile logo */}
-          <div className="lg:hidden flex items-center gap-2.5 mb-8">
-            <div className="h-9 w-9 rounded-xl bg-gradient-to-br from-blue-500 to-blue-700 flex items-center justify-center">
-              <Database className="h-4 w-4 text-white" />
-            </div>
-            <span className="text-lg font-bold">InsightSQL</span>
+            {/* Step indicators */}
+            <motion.div
+              initial={{ opacity: 0, y: 16 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.6, delay: 0.15 }}
+              className="space-y-3"
+            >
+              {[
+                { n: 1, label: "Verify your email" },
+                { n: 2, label: "Set new password" },
+              ].map((s) => (
+                <div key={s.n} className={`flex items-center gap-3 ${step >= s.n ? "opacity-100" : "opacity-30"}`}>
+                  <div className={`h-7 w-7 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 ${step > s.n ? "bg-emerald-500 text-white" : step === s.n ? "bg-indigo-500 text-white" : "border border-slate-700 text-slate-500"}`}>
+                    {step > s.n ? <Check className="h-3.5 w-3.5" /> : s.n}
+                  </div>
+                  <span className={`text-sm font-medium ${step >= s.n ? "text-white" : "text-slate-500"}`}>{s.label}</span>
+                </div>
+              ))}
+            </motion.div>
           </div>
 
-          <div className="glass rounded-2xl p-8 shadow-2xl shadow-black/5">
-            {/* Step indicator */}
-            <div className="flex items-center justify-center gap-3 mb-8">
-              <div
-                className={`h-2 rounded-full transition-all duration-300 ${
-                  step === 1 ? "w-8 bg-blue-500" : "w-2 bg-muted-foreground/30"
-                }`}
-              />
-              <div
-                className={`h-2 rounded-full transition-all duration-300 ${
-                  step === 2 ? "w-8 bg-blue-500" : "w-2 bg-muted-foreground/30"
-                }`}
-              />
+          <p className="text-xs text-slate-600 relative z-10">© 2025 InsightSQL. All rights reserved.</p>
+        </div>
+      </div>
+
+      {/* ── Right panel — theme-aware form ────────────────────────── */}
+      <div className="flex-1 flex flex-col">
+        <div className="flex items-center justify-between px-6 py-4">
+          <Link href="/" className="lg:hidden flex items-center gap-2">
+            <div className="h-7 w-7 rounded-lg bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center">
+              <Database className="h-3.5 w-3.5 text-white" />
+            </div>
+            <span className="font-bold text-sm">InsightSQL</span>
+          </Link>
+          <div className="lg:ml-auto">
+            <ThemeToggle />
+          </div>
+        </div>
+
+        <div className="flex-1 flex items-center justify-center px-6 py-8">
+          <motion.div
+            initial={{ opacity: 0, y: 16 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
+            className="w-full max-w-[400px] space-y-8"
+          >
+            {/* Progress dots */}
+            <div className="flex items-center gap-2">
+              <div className={`h-1.5 rounded-full transition-all duration-300 ${step === 1 ? "w-8 bg-indigo-500" : "w-3 bg-indigo-500"}`} />
+              <div className={`h-1.5 rounded-full transition-all duration-300 ${step === 2 ? "w-8 bg-indigo-500" : "w-3 bg-muted"}`} />
             </div>
 
             <AnimatePresence mode="wait">
               {step === 1 ? (
                 <motion.div
                   key="step1"
-                  initial={{ opacity: 0, x: -20 }}
+                  initial={{ opacity: 0, x: -16 }}
                   animate={{ opacity: 1, x: 0 }}
-                  exit={{ opacity: 0, x: 20 }}
+                  exit={{ opacity: 0, x: 16 }}
                   transition={{ duration: 0.3 }}
+                  className="space-y-7"
                 >
-                  <div className="text-center mb-8">
-                    <div className="mx-auto w-14 h-14 rounded-2xl bg-gradient-to-br from-blue-500/20 to-blue-700/20 flex items-center justify-center mb-4 border border-blue-500/20">
-                      <KeyRound className="h-7 w-7 text-blue-500" />
+                  <div className="space-y-1.5">
+                    <div className="h-12 w-12 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center mb-4">
+                      <KeyRound className="h-6 w-6 text-indigo-500" />
                     </div>
-                    <h1 className="text-2xl font-bold mb-2">Forgot password?</h1>
-                    <p className="text-muted-foreground text-sm">
-                      Enter your email and we&apos;ll verify your account
-                    </p>
+                    <h2 className="text-2xl font-bold text-foreground tracking-tight">Forgot your password?</h2>
+                    <p className="text-muted-foreground text-sm">Enter your email and we&apos;ll look up your account.</p>
                   </div>
 
                   {error && (
-                    <motion.div
-                      initial={{ opacity: 0, y: -8 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      className="mb-5 p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-600 dark:text-red-400 text-sm text-center"
-                    >
-                      {error}
-                    </motion.div>
+                    <div className="p-3.5 rounded-xl bg-destructive/8 border border-destructive/20 text-destructive text-sm font-medium">{error}</div>
                   )}
 
-                  <form className="space-y-5" onSubmit={handleRequestReset}>
-                    <div className="space-y-2">
-                      <Label htmlFor="email" className="text-sm font-medium">
-                        Email address
-                      </Label>
+                  <form className="space-y-4" onSubmit={handleRequestReset}>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="email" className="text-sm font-medium text-foreground">Email address</Label>
                       <div className="relative">
-                        <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                        <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                         <Input
                           id="email"
                           type="email"
-                          placeholder="you@example.com"
+                          placeholder="you@company.com"
                           value={email}
                           onChange={(e) => setEmail(e.target.value)}
-                          className="pl-10 h-11 bg-background/50"
+                          className="pl-10 h-11 bg-background border-border text-foreground placeholder:text-muted-foreground focus:border-indigo-500"
                           required
                         />
                       </div>
                     </div>
-
-                    <Button
-                      type="submit"
-                      disabled={isLoading}
-                      className="w-full h-11 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white shadow-lg shadow-blue-500/25 font-semibold text-sm"
-                    >
-                      {isLoading ? (
-                        <>
-                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                          Verifying...
-                        </>
-                      ) : (
-                        "Send Reset Link"
-                      )}
+                    <Button type="submit" disabled={isLoading} className="w-full h-11 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold shadow-lg shadow-indigo-600/20">
+                      {isLoading ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Verifying…</> : "Find my account"}
                     </Button>
                   </form>
                 </motion.div>
               ) : (
                 <motion.div
                   key="step2"
-                  initial={{ opacity: 0, x: 20 }}
+                  initial={{ opacity: 0, x: 16 }}
                   animate={{ opacity: 1, x: 0 }}
-                  exit={{ opacity: 0, x: -20 }}
+                  exit={{ opacity: 0, x: -16 }}
                   transition={{ duration: 0.3 }}
+                  className="space-y-7"
                 >
-                  <div className="text-center mb-8">
-                    <div className="mx-auto w-14 h-14 rounded-2xl bg-gradient-to-br from-green-500/20 to-emerald-700/20 flex items-center justify-center mb-4 border border-green-500/20">
-                      <ShieldCheck className="h-7 w-7 text-green-500" />
+                  <div className="space-y-1.5">
+                    <div className="h-12 w-12 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center mb-4">
+                      <ShieldCheck className="h-6 w-6 text-emerald-500" />
                     </div>
-                    <h1 className="text-2xl font-bold mb-2">Set new password</h1>
-                    <p className="text-muted-foreground text-sm">
-                      Choose a strong password for your account
-                    </p>
+                    <h2 className="text-2xl font-bold text-foreground tracking-tight">Set new password</h2>
+                    <p className="text-muted-foreground text-sm">Choose a strong password for <span className="font-medium text-foreground">{email}</span></p>
                   </div>
 
                   {success && (
-                    <motion.div
-                      initial={{ opacity: 0, y: -8 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      className="mb-5 p-3 rounded-lg bg-green-500/10 border border-green-500/20 text-green-600 dark:text-green-400 text-sm text-center"
-                    >
-                      {success}
-                    </motion.div>
+                    <div className="flex items-center gap-2.5 p-3.5 rounded-xl bg-emerald-500/8 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-sm font-medium">
+                      <Check className="h-4 w-4 flex-shrink-0" />{success}
+                    </div>
                   )}
-
                   {error && (
-                    <motion.div
-                      initial={{ opacity: 0, y: -8 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      className="mb-5 p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-600 dark:text-red-400 text-sm text-center"
-                    >
-                      {error}
-                    </motion.div>
+                    <div className="p-3.5 rounded-xl bg-destructive/8 border border-destructive/20 text-destructive text-sm font-medium">{error}</div>
                   )}
 
-                  <form className="space-y-5" onSubmit={handleResetPassword}>
-                    <div className="space-y-2">
-                      <Label htmlFor="newPassword" className="text-sm font-medium">
-                        New Password
-                      </Label>
+                  <form className="space-y-4" onSubmit={handleResetPassword}>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="newPassword" className="text-sm font-medium text-foreground">New password</Label>
                       <div className="relative">
-                        <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                        <Input
-                          id="newPassword"
-                          type={showNewPassword ? "text" : "password"}
-                          placeholder="••••••••"
-                          value={newPassword}
-                          onChange={(e) => setNewPassword(e.target.value)}
-                          className="pl-10 pr-10 h-11 bg-background/50"
-                          required
-                        />
-                        <button
-                          type="button"
-                          onClick={() => setShowNewPassword(!showNewPassword)}
-                          className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-                        >
-                          {showNewPassword ? (
-                            <EyeOff className="h-4 w-4" />
-                          ) : (
-                            <Eye className="h-4 w-4" />
-                          )}
+                        <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                        <Input id="newPassword" type={showNewPassword ? "text" : "password"} placeholder="Min. 6 characters"
+                          value={newPassword} onChange={(e) => setNewPassword(e.target.value)}
+                          className="pl-10 pr-11 h-11 bg-background border-border text-foreground focus:border-indigo-500" required />
+                        <button type="button" onClick={() => setShowNewPassword(!showNewPassword)}
+                          className="absolute right-3.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
+                          {showNewPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                         </button>
                       </div>
                     </div>
-
-                    <div className="space-y-2">
-                      <Label htmlFor="confirmPassword" className="text-sm font-medium">
-                        Confirm New Password
-                      </Label>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="confirmPassword" className="text-sm font-medium text-foreground">Confirm password</Label>
                       <div className="relative">
-                        <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                        <Input
-                          id="confirmPassword"
-                          type={showConfirmPassword ? "text" : "password"}
-                          placeholder="••••••••"
-                          value={confirmPassword}
-                          onChange={(e) => setConfirmPassword(e.target.value)}
-                          className="pl-10 pr-10 h-11 bg-background/50"
-                          required
-                        />
-                        <button
-                          type="button"
-                          onClick={() => setShowConfirmPassword(!showConfirmPassword)}
-                          className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-                        >
-                          {showConfirmPassword ? (
-                            <EyeOff className="h-4 w-4" />
-                          ) : (
-                            <Eye className="h-4 w-4" />
-                          )}
+                        <Lock className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                        <Input id="confirmPassword" type={showConfirmPassword ? "text" : "password"} placeholder="••••••••"
+                          value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)}
+                          className="pl-10 pr-11 h-11 bg-background border-border text-foreground focus:border-indigo-500" required />
+                        <button type="button" onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                          className="absolute right-3.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
+                          {showConfirmPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                         </button>
                       </div>
                     </div>
-
-                    <Button
-                      type="submit"
-                      disabled={isLoading}
-                      className="w-full h-11 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white shadow-lg shadow-blue-500/25 font-semibold text-sm"
-                    >
-                      {isLoading ? (
-                        <>
-                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                          Resetting...
-                        </>
-                      ) : (
-                        "Reset Password"
-                      )}
+                    <Button type="submit" disabled={isLoading} className="w-full h-11 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold shadow-lg shadow-indigo-600/20">
+                      {isLoading ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Resetting…</> : "Reset password"}
                     </Button>
                   </form>
                 </motion.div>
               )}
             </AnimatePresence>
 
-            <div className="mt-6 text-center">
-              <Link
-                href="/login"
-                className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
-              >
-                <ArrowLeft className="h-3.5 w-3.5" />
-                Back to login
-              </Link>
-            </div>
-          </div>
-        </motion.div>
+            <Link href="/login" className="flex items-center justify-center gap-1.5 text-sm text-muted-foreground hover:text-foreground">
+              <ArrowLeft className="h-3.5 w-3.5" />Back to sign in
+            </Link>
+          </motion.div>
+        </div>
       </div>
     </div>
   );

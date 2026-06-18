@@ -12,6 +12,7 @@ class DatabaseConnection(BaseModel):
     password: Optional[str] = None
     status: str = "disconnected"
     is_default: bool = False
+    user_id: Optional[str] = None  # owner – used for multi-user isolation
     # Snowflake-specific fields
     account: Optional[str] = None
     warehouse: Optional[str] = None

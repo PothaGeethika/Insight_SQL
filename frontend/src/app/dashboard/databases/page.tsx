@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import * as React from "react";
+import { toast } from "sonner";
 import { motion, AnimatePresence } from "framer-motion";
 import { Plus, MoreHorizontal, X, ChevronDown, CheckCircle2, AlertCircle, Loader2, Edit, Trash2, Link, Unlink, Star } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -169,7 +170,7 @@ export default function DatabasesPage() {
 
   const fetchConnections = async () => {
     try {
-      const res = await fetch("http://localhost:8000/databases");
+      const res = await fetch("/api/backend/databases");
       if (res.ok) {
         const data = await res.json();
         setConnections(data);
@@ -345,10 +346,11 @@ export default function DatabasesPage() {
   const handleDelete = async (connId: string) => {
     if (!confirm("Are you sure you want to delete this database connection?")) return;
     try {
-      const res = await fetch(`http://localhost:8000/databases/${connId}`, {
+      const res = await fetch(`/api/backend/databases/${connId}`, {
         method: "DELETE",
       });
       if (res.ok) {
+        toast.success("Database connection deleted.");
         fetchConnections();
       }
     } catch (e) {
@@ -358,7 +360,7 @@ export default function DatabasesPage() {
 
   const handleToggleConnect = async (conn: any) => {
     try {
-      const res = await fetch(`http://localhost:8000/databases/${conn.id}/default`, {
+      const res = await fetch(`/api/backend/databases/${conn.id}/default`, {
         method: "PUT",
       });
       if (res.ok) {
@@ -432,7 +434,7 @@ export default function DatabasesPage() {
     setTestResult(null);
 
     try {
-      const res = await fetch("http://localhost:8000/databases/test", {
+      const res = await fetch("/api/backend/databases/test", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload)
@@ -458,8 +460,8 @@ export default function DatabasesPage() {
 
     try {
       const url = editingConnection
-        ? `http://localhost:8000/databases/${editingConnection.id}`
-        : "http://localhost:8000/databases";
+        ? `/api/backend/databases/${editingConnection.id}`
+        : "/api/backend/databases";
 
       const method = editingConnection ? "PUT" : "POST";
 
@@ -470,10 +472,9 @@ export default function DatabasesPage() {
       });
 
       if (res.ok) {
-        setTestResult({
-          status: 'success',
-          message: editingConnection ? "Successfully updated connection!" : "Successfully connected and saved!"
-        });
+        const successMsg = editingConnection ? "Successfully updated connection!" : "Successfully connected and saved!";
+        setTestResult({ status: 'success', message: successMsg });
+        toast.success(successMsg);
         fetchConnections();
         setTimeout(() => {
           setShowAddForm(false);
@@ -507,7 +508,7 @@ export default function DatabasesPage() {
   };
 
   return (
-    <div className="flex flex-col h-full bg-[var(--surface-0)] overflow-y-auto">
+    <div className="flex flex-col h-full bg-[var(--surface-0)] dark:bg-transparent overflow-y-auto">
       <div className="max-w-5xl mx-auto w-full p-8 space-y-8">
         {/* Header Section */}
         <div className="flex items-center justify-between">
@@ -703,7 +704,7 @@ export default function DatabasesPage() {
                 animate={{ opacity: 1, scale: 1, y: 0 }}
                 exit={{ opacity: 0, scale: 0.95, y: 20 }}
                 transition={{ type: "spring", duration: 0.3 }}
-                className="relative bg-[#0c0c14] border border-slate-800/80 w-full max-w-3xl rounded-2xl p-6 shadow-2xl z-10 flex flex-col max-h-[85vh] overflow-hidden text-white"
+                className="relative bg-card border border-border w-full max-w-3xl rounded-2xl p-6 shadow-2xl z-10 flex flex-col max-h-[85vh] overflow-hidden text-foreground"
               >
                 {/* Close X Button */}
                 <button

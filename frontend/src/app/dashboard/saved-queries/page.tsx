@@ -128,7 +128,7 @@ export default function SavedQueriesPage() {
   const filteredQueries = processItems(queries);
 
   return (
-    <div className="h-full flex flex-col bg-[var(--surface-0)] text-slate-300 p-8 space-y-8 overflow-hidden">
+    <div className="h-full flex flex-col bg-[var(--surface-0)] dark:bg-transparent text-slate-300 p-8 space-y-8 overflow-hidden">
       <div className="flex items-center justify-between">
         <div className="space-y-1">
           <div className="flex items-center gap-3">

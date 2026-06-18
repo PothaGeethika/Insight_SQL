@@ -26,7 +26,7 @@ const containerVariants = {
       delayChildren: 0.1
     }
   }
-};
+} as const;
 
 const itemVariants = {
   hidden: { opacity: 0, y: 40, scale: 0.85, rotateX: -15 },
@@ -42,7 +42,7 @@ const itemVariants = {
       mass: 1.1
     }
   }
-};
+} as const;
 
 export function AutoDashboard({ widgets }: AutoDashboardProps) {
   if (!widgets || widgets.length === 0) {

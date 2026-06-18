@@ -239,6 +239,47 @@ class SQLAgent:
         log.info("[QUERY_GEN] Generated query:\n%s", cleaned)
         return cleaned
 
+    def fix_query(self, question, schema, wrong_query, error_message, db_type="postgresql", provider="gemini", model_name=None):
+        """Self-healing loop: asks the LLM to fix a query that failed to execute."""
+        log.info("[QUERY_FIX] ── Attempting to self-heal query ──────────────────")
+        llm = self.get_llm(provider, model_name, temperature=0)
+
+        fix_prompt = ChatPromptTemplate.from_template("""
+        You are a data analyst assistant. You previously generated a query that resulted in an execution error.
+        Please fix the query so that it executes successfully.
+        
+        Database Type: {db_type}
+        
+        Schema:
+        {schema}
+        
+        Original User Question:
+        {question}
+        
+        The query you generated:
+        {wrong_query}
+        
+        The error message returned by the database:
+        {error_message}
+        
+        Provide ONLY the corrected raw query (SQL or MQL JSON) without any markdown formatting or explanations.
+        """)
+
+        chain = fix_prompt | llm | self.parser
+        t0 = time.perf_counter()
+        result = chain.invoke({
+            "db_type": db_type,
+            "schema": schema,
+            "question": question,
+            "wrong_query": wrong_query,
+            "error_message": str(error_message)
+        })
+        elapsed = time.perf_counter() - t0
+
+        cleaned = result.strip().replace("```sql", "").replace("```json", "").replace("```", "").strip()
+        log.info("[QUERY_FIX] Fixed query generated in %.2fs:\n%s", elapsed, cleaned)
+        return cleaned
+
     def generate_suggestions(self, history_text, schema, provider="gemini", model_name=None):
         """Generates relevant follow-up questions based on history and schema."""
         log.info("[SUGGESTIONS] Generating follow-up suggestions – provider='%s'", provider)
@@ -347,6 +388,54 @@ class SQLAgent:
         title = title.strip().strip('"').strip("'")
         log.info("[SUMMARIZE] Title generated in %.2fs: '%s'", elapsed, title)
         return title
+
+    async def synthesize_answer_stream(self, question, headers, rows, provider="gemini", model_name=None):
+        """Streams the natural language answer token by token using an async generator."""
+        import asyncio
+        from langchain_core.callbacks import AsyncCallbackHandler
+
+        class _TokenQueue(AsyncCallbackHandler):
+            def __init__(self):
+                self.queue: asyncio.Queue = asyncio.Queue()
+
+            async def on_llm_new_token(self, token: str, **kwargs):
+                await self.queue.put(token)
+
+            async def on_llm_end(self, *args, **kwargs):
+                await self.queue.put(None)  # sentinel
+
+            async def on_llm_error(self, error, **kwargs):
+                await self.queue.put(None)
+
+        handler = _TokenQueue()
+
+        try:
+            llm = self.get_llm(provider, model_name, temperature=0)
+            # Enable streaming on the LLM
+            llm.streaming = True
+            chain = self.synthesize_prompt | llm | self.parser
+
+            truncated_rows = rows[:30]
+            # Run the chain in background so we can yield tokens from the queue
+            asyncio.ensure_future(
+                chain.ainvoke(
+                    {
+                        "question": question,
+                        "headers": json.dumps(headers),
+                        "rows": json.dumps(truncated_rows),
+                    },
+                    config={"callbacks": [handler]},
+                )
+            )
+
+            while True:
+                token = await asyncio.wait_for(handler.queue.get(), timeout=30)
+                if token is None:
+                    break
+                yield token
+        except Exception as e:
+            log.error("[SYNTHESIZE_STREAM] Error: %s", e, exc_info=True)
+            yield f"Error generating response: {str(e)}"
 
     def synthesize_answer(self, question, headers, rows, provider="gemini", model_name=None):
         """Synthesizes a natural language answer based on query results."""

@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 import uuid
@@ -7,6 +8,71 @@ from logger_config import get_logger
 import urllib.parse
 
 log = get_logger("connection_manager")
+
+# ---------------------------------------------------------------------------
+# Credential encryption helpers (Fernet symmetric encryption)
+# ---------------------------------------------------------------------------
+# The key is derived from CONNECTIONS_SECRET env var. If not set, a random
+# key is generated at startup – credentials will be unreadable after restart
+# unless CONNECTIONS_SECRET is set in .env.
+# ---------------------------------------------------------------------------
+
+def _get_fernet():
+    from cryptography.fernet import Fernet
+    raw = os.getenv("CONNECTIONS_SECRET")
+    if raw:
+        # Accept a raw 32-byte URL-safe base64 key or plain text; pad as needed
+        key_bytes = raw.encode()
+        if len(key_bytes) < 32:
+            key_bytes = key_bytes.ljust(32, b"=")
+        key = base64.urlsafe_b64encode(key_bytes[:32])
+    else:
+        log.warning(
+            "[CONN_MGR] CONNECTIONS_SECRET not set – using transient key. "
+            "Credentials will be unreadable after restart. Set CONNECTIONS_SECRET in .env."
+        )
+        key = Fernet.generate_key()
+    return Fernet(key)
+
+
+def _encrypt(value: str) -> str:
+    if not value:
+        return value
+    f = _get_fernet()
+    return f.encrypt(value.encode()).decode()
+
+
+def _decrypt(value: str) -> str:
+    if not value:
+        return value
+    try:
+        f = _get_fernet()
+        return f.decrypt(value.encode()).decode()
+    except Exception:
+        # Value may already be plaintext (legacy, pre-encryption data)
+        return value
+
+
+_SENSITIVE_FIELDS = ("password", "api_key")
+
+
+def _encrypt_record(record: dict) -> dict:
+    out = dict(record)
+    for field in _SENSITIVE_FIELDS:
+        if out.get(field):
+            out[field] = _encrypt(out[field])
+    return out
+
+
+def _decrypt_record(record: dict) -> dict:
+    out = dict(record)
+    for field in _SENSITIVE_FIELDS:
+        if out.get(field):
+            out[field] = _decrypt(out[field])
+    return out
+
+
+# ---------------------------------------------------------------------------
 
 class ConnectionManager:
     def __init__(self, storage_path="connections.json"):
@@ -32,7 +98,8 @@ class ConnectionManager:
         log.debug("[CONN_MGR] Save complete.")
 
     def list_connections(self) -> List[DatabaseConnection]:
-        conns = [DatabaseConnection(**c) for c in self._load()]
+        raw = self._load()
+        conns = [DatabaseConnection(**_decrypt_record(c)) for c in raw]
         log.info("[CONN_MGR] list_connections → %d connection(s) found.", len(conns))
         return conns
 
@@ -42,49 +109,44 @@ class ConnectionManager:
         log.info("[CONN_MGR] Adding new connection: name='%s'  type='%s'  id=%s",
                  conn_data.get('name'), conn_data.get('type'), conn_data['id'])
 
-        # If it's the first connection, make it default
         if not connections:
             conn_data['is_default'] = True
             log.info("[CONN_MGR] First connection – marking as default.")
 
-        connections.append(conn_data)
+        connections.append(_encrypt_record(conn_data))
         self._save(connections)
-        log.info("[CONN_MGR] Connection saved successfully.")
+        log.info("[CONN_MGR] Connection saved successfully (credentials encrypted).")
         return DatabaseConnection(**conn_data)
 
     def get_connection(self, conn_id: str) -> Optional[DatabaseConnection]:
         log.debug("[CONN_MGR] get_connection id='%s'", conn_id)
-        connections = self._load()
-        for c in connections:
+        for c in self._load():
             if c['id'] == conn_id:
+                decrypted = _decrypt_record(c)
                 log.debug("[CONN_MGR] Found connection: name='%s'  type='%s'", c.get('name'), c.get('type'))
-                return DatabaseConnection(**c)
+                return DatabaseConnection(**decrypted)
         log.warning("[CONN_MGR] Connection id='%s' not found!", conn_id)
         return None
 
     def get_default_connection(self) -> Optional[DatabaseConnection]:
         log.debug("[CONN_MGR] Looking for default connection.")
-        connections = self._load()
-        for c in connections:
+        for c in self._load():
             if c.get('is_default'):
+                decrypted = _decrypt_record(c)
                 log.info("[CONN_MGR] Default connection: name='%s'  type='%s'", c.get('name'), c.get('type'))
-                return DatabaseConnection(**c)
+                return DatabaseConnection(**decrypted)
         log.warning("[CONN_MGR] No default connection is configured.")
         return None
 
     def find_connection_by_name_or_type(self, identifier: str) -> Optional[DatabaseConnection]:
         log.debug("[CONN_MGR] find_connection_by_name_or_type identifier='%s'", identifier)
-        connections = self._load()
-        # First try exact name match
-        for c in connections:
+        raw = self._load()
+        for c in raw:
             if c.get('name') == identifier:
-                log.debug("[CONN_MGR] Matched by name.")
-                return DatabaseConnection(**c)
-        # Then try type match
-        for c in connections:
+                return DatabaseConnection(**_decrypt_record(c))
+        for c in raw:
             if c.get('type') == identifier:
-                log.debug("[CONN_MGR] Matched by type.")
-                return DatabaseConnection(**c)
+                return DatabaseConnection(**_decrypt_record(c))
         log.warning("[CONN_MGR] No connection matched identifier='%s'", identifier)
         return None
 
@@ -95,6 +157,18 @@ class ConnectionManager:
         connections = [c for c in connections if c['id'] != conn_id]
         self._save(connections)
         log.info("[CONN_MGR] Deleted %d connection(s). Remaining: %d", before - len(connections), len(connections))
+
+    def update_connection(self, conn_id: str, new_data: dict) -> Optional[DatabaseConnection]:
+        connections = self._load()
+        for i, c in enumerate(connections):
+            if c['id'] == conn_id:
+                new_data['id'] = conn_id
+                new_data['is_default'] = c.get('is_default', False)
+                connections[i] = _encrypt_record(new_data)
+                self._save(connections)
+                log.info("[CONN_MGR] Updated connection id='%s'", conn_id)
+                return DatabaseConnection(**new_data)
+        return None
 
     def format_connection_url(self, conn: DatabaseConnection) -> str:
         log.debug("[CONN_MGR] Formatting connection URL for type='%s'  name='%s'", conn.type, conn.name)
@@ -148,8 +222,6 @@ class ConnectionManager:
             log.error("[CONN_MGR] Unsupported database type: '%s'", conn.type)
             raise ValueError(f"Unsupported database type: {conn.type}")
 
-        # Log URL but mask password
         safe_url = url.replace(urllib.parse.quote_plus(conn.password), "****") if conn.password else url
         log.debug("[CONN_MGR] Built URL: %s", safe_url)
         return url
-

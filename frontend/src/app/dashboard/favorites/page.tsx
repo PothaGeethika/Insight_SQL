@@ -49,7 +49,7 @@ export default function FavoritesPage() {
   const loadFavorites = () => {
     // 1. Load Favorite Databases
     const savedDbIds = JSON.parse(localStorage.getItem("db_favorites") || "[]");
-    fetch("http://localhost:8000/databases")
+    fetch("/api/backend/databases")
       .then(res => res.json())
       .then(data => {
         if (Array.isArray(data)) {
@@ -208,7 +208,7 @@ export default function FavoritesPage() {
   };
 
   return (
-    <div className="h-full flex flex-col bg-[var(--surface-0)] text-slate-900 dark:text-slate-300 p-8 space-y-8 overflow-hidden">
+    <div className="h-full flex flex-col bg-[var(--surface-0)] dark:bg-transparent text-slate-900 dark:text-slate-300 p-8 space-y-8 overflow-hidden">
       {/* Header Area */}
       <div className="flex items-center justify-between">
         <div className="space-y-1">

@@ -18,30 +18,23 @@ import {
   ExternalLink,
   Star,
   Bookmark,
-  Plus,
-  Search,
-  Sun,
-  Moon,
   LayoutGrid,
   Menu,
   X,
   LogOut,
   Loader2,
+  LucideIcon,
+  CreditCard,
+  Users,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { Input } from "@/components/ui/input";
+import type { AuthUser } from "@/types";
 
 interface NavItem {
   name: string;
   href: string;
-  icon: any;
-}
-
-interface AuthUser {
-  id: number;
-  name: string;
-  email: string;
+  icon: LucideIcon;
 }
 
 const mainNavItems: NavItem[] = [
@@ -51,6 +44,8 @@ const mainNavItems: NavItem[] = [
   { name: "Projects", href: "/dashboard/projects", icon: LayoutGrid },
   { name: "Saved Queries", href: "/dashboard/saved-queries", icon: Bookmark },
   { name: "Favorites", href: "/dashboard/favorites", icon: Star },
+  { name: "Team", href: "/dashboard/team", icon: Users },
+  { name: "Billing", href: "/dashboard/billing", icon: CreditCard },
   { name: "Settings", href: "/dashboard/settings", icon: Settings },
 ];
 
@@ -63,7 +58,7 @@ export default function DashboardLayout({
   const [collapsed, setCollapsed] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(280);
   const [isResizing, setIsResizing] = useState(false);
-  const { theme, setTheme } = useTheme();
+  const { resolvedTheme, setTheme } = useTheme();
   const [mounted, setMounted] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -104,8 +99,8 @@ export default function DashboardLayout({
     fetchUser();
   }, []);
 
-  // Compute actual dark mode state (resolving 'system' if needed)
-  const isDarkMode = mounted && (theme === "dark" || (theme === "system" && typeof window !== "undefined" && window.matchMedia("(prefers-color-scheme: dark)").matches));
+  // resolvedTheme is always "dark" or "light" — next-themes handles system resolution
+  const isDarkMode = mounted && resolvedTheme === "dark";
 
   const startResizing = (mouseDownEvent: React.MouseEvent) => {
     mouseDownEvent.preventDefault();
@@ -166,7 +161,28 @@ export default function DashboardLayout({
   const firstName = userName.split(" ")[0];
 
   return (
-    <div className="flex h-screen w-full overflow-hidden font-sans bg-white dark:bg-[var(--surface-0)] text-slate-800 dark:text-slate-300 transition-colors duration-300">
+    <div className="flex h-screen w-full overflow-hidden font-sans relative bg-white dark:bg-black text-slate-800 dark:text-slate-300 transition-colors duration-300">
+      {/* ── Background Video (Dark Mode) ── */}
+      <video
+        autoPlay
+        loop
+        muted
+        playsInline
+        className="absolute inset-0 w-full h-full object-cover z-0 hidden dark:block opacity-70 pointer-events-none"
+      >
+        <source src="/bg-video.mp4" type="video/mp4" />
+      </video>
+
+      {/* ── Background Video (Light Mode) ── */}
+      <video
+        autoPlay
+        loop
+        muted
+        playsInline
+        className="absolute inset-0 w-full h-full object-cover z-0 block dark:hidden opacity-60 pointer-events-none"
+      >
+        <source src="/bg-video-light.mp4" type="video/mp4" />
+      </video>
       
       {/* Mobile Drawer Backdrop Overlay */}
       {isMobile && mobileOpen && (
@@ -176,84 +192,91 @@ export default function DashboardLayout({
         />
       )}
 
-      {/* Sidebar */}
+      {/* ── Sidebar ─────────────────────────────────────────────────── */}
       <motion.aside
         initial={false}
-        animate={isMobile ? { x: mobileOpen ? 0 : -280, width: 280 } : { x: 0, width: collapsed ? 80 : sidebarWidth }}
-        transition={{ type: "spring", stiffness: 300, damping: 30 }}
-        className={`flex flex-col z-50 md:z-30 bg-slate-50 dark:bg-[var(--surface-0)] border-r border-slate-200 dark:border-slate-900/40 transition-colors duration-300 ${
+        animate={isMobile ? { x: mobileOpen ? 0 : -280, width: 280 } : { x: 0, width: collapsed ? 72 : sidebarWidth }}
+        transition={{ type: "spring", stiffness: 320, damping: 32 }}
+        className={`flex flex-col z-50 md:z-30 bg-white/50 dark:bg-[#0a0a0f]/50 backdrop-blur-md border-r border-[var(--sidebar-border)] dark:border-white/10 ${
           isMobile ? "fixed inset-y-0 left-0 shadow-2xl" : "relative h-full"
         }`}
       >
-        {/* Logo Header */}
-        <div className="p-7 flex items-center justify-between">
+        {/* Logo */}
+        <div className="h-16 flex items-center justify-between px-5 border-b border-[var(--sidebar-border)] dark:border-white/10">
           {(!collapsed || isMobile) && (
             <motion.div
-              initial={{ opacity: 0, x: -10 }}
+              initial={{ opacity: 0, x: -8 }}
               animate={{ opacity: 1, x: 0 }}
-              className="flex items-center gap-3"
+              className="flex items-center gap-2.5"
             >
-              <div className="h-9 w-9 rounded-xl bg-gradient-to-br from-indigo-600 to-purple-700 flex items-center justify-center shadow-lg shadow-indigo-600/30">
-                <Database className="h-5 w-5 text-white" />
+              <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center shadow-md shadow-indigo-500/30">
+                <Database className="h-4 w-4 text-white" />
               </div>
-              <span className="font-black text-xl tracking-tight text-slate-900 dark:text-white">InsightSQL</span>
+              <span className="font-bold text-base tracking-tight text-foreground">InsightSQL</span>
             </motion.div>
           )}
-          
+          {collapsed && !isMobile && (
+            <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center shadow-md shadow-indigo-500/30 mx-auto">
+              <Database className="h-4 w-4 text-white" />
+            </div>
+          )}
           {isMobile ? (
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => setMobileOpen(false)}
-              className="h-8 w-8 text-slate-400 dark:text-slate-500 hover:text-slate-900 dark:hover:text-white"
-            >
-              <X className="h-5 w-5" />
+            <Button variant="ghost" size="icon" onClick={() => setMobileOpen(false)} className="h-8 w-8 ml-auto">
+              <X className="h-4 w-4" />
             </Button>
           ) : (
             <Button
               variant="ghost"
               size="icon"
               onClick={() => setCollapsed(!collapsed)}
-              className="h-8 w-8 text-slate-400 dark:text-slate-500 hover:text-slate-900 dark:hover:text-white transition-colors"
+              className={`h-7 w-7 text-muted-foreground hover:text-foreground ${collapsed ? "mx-auto" : ""}`}
             >
-              {collapsed ? <ChevronRight className="h-5 w-5" /> : <ChevronLeft className="h-5 w-5" />}
+              {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
             </Button>
           )}
         </div>
 
         {/* Navigation */}
-        <div className="flex-1 px-4 py-2 space-y-1 overflow-y-auto">
+        <div className="flex-1 px-3 py-4 space-y-0.5 overflow-y-auto">
           {mainNavItems.map((item) => {
             const isActive = pathname === item.href;
             return (
               <Link key={item.name} href={item.href} onClick={() => isMobile && setMobileOpen(false)}>
                 <div
-                  className={`flex items-center gap-4 px-4 py-3 rounded-2xl transition-all duration-300 group cursor-pointer ${
+                  className={`flex items-center gap-3 px-3 py-2.5 rounded-xl cursor-pointer group ${
                     isActive
-                      ? "bg-indigo-650/10 dark:bg-indigo-600/15 text-indigo-600 dark:text-white font-bold"
-                      : "hover:bg-slate-100 dark:hover:bg-white/5 text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-100"
+                      ? "bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 font-semibold"
+                      : "text-muted-foreground hover:text-foreground hover:bg-accent"
                   }`}
                 >
-                  <item.icon className={`h-5 w-5 flex-shrink-0 ${isActive ? "text-indigo-500" : "group-hover:text-slate-700 dark:group-hover:text-slate-100 transition-colors"}`} />
-                  {(!collapsed || isMobile) && <span className="text-sm tracking-wide">{item.name}</span>}
+                  <item.icon className={`h-[18px] w-[18px] flex-shrink-0 ${isActive ? "text-indigo-500" : ""}`} />
+                  {(!collapsed || isMobile) && (
+                    <span className="text-sm leading-none">{item.name}</span>
+                  )}
+                  {isActive && (!collapsed || isMobile) && (
+                    <div className="ml-auto h-1.5 w-1.5 rounded-full bg-indigo-500" />
+                  )}
                 </div>
               </Link>
             );
           })}
         </div>
 
-        {/* Bottom Section: User Profile & Credits */}
-        <div className="p-4 space-y-4 mb-2">
+        {/* Bottom: user card */}
+        <div className="p-3 border-t border-[var(--sidebar-border)] dark:border-white/10 space-y-1">
           {(!collapsed || isMobile) && (
-            <div className="bg-white dark:bg-[var(--surface-1)] rounded-[24px] p-5 border border-slate-200 dark:border-slate-900/50 shadow-lg dark:shadow-2xl transition-colors">
-              <div className="flex items-center justify-between gap-3 mb-5">
-                <div className="flex items-center gap-3 min-w-0 flex-1">
-                  <Avatar className="h-11 w-11 border-2 border-slate-200 dark:border-slate-800 shadow-xl">
-                    <AvatarFallback className="bg-indigo-600 text-white font-black text-xs">{userInitials}</AvatarFallback>
+            <div className="rounded-xl border border-border bg-card p-3.5 space-y-3">
+              {/* User row */}
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                  <Avatar className="h-8 w-8 border border-border flex-shrink-0">
+                    <AvatarFallback className="bg-gradient-to-br from-indigo-500 to-violet-600 text-white text-xs font-bold">
+                      {userInitials}
+                    </AvatarFallback>
                   </Avatar>
                   <div className="flex-1 min-w-0">
-                    <p className="text-[13px] font-black text-slate-900 dark:text-white truncate">{userName}</p>
-                    <p className="text-[10px] text-slate-400 dark:text-slate-500 truncate font-medium">{userEmail}</p>
+                    <p className="text-xs font-semibold text-foreground truncate">{userName}</p>
+                    <p className="text-[10px] text-muted-foreground truncate">{userEmail}</p>
                   </div>
                 </div>
                 <Button
@@ -261,141 +284,113 @@ export default function DashboardLayout({
                   size="icon"
                   onClick={handleLogout}
                   disabled={isLoggingOut}
-                  className="h-8 w-8 text-slate-400 hover:text-red-500 hover:bg-red-500/10 rounded-xl transition-all active:scale-95 flex-shrink-0 cursor-pointer"
+                  className="h-7 w-7 text-muted-foreground hover:text-destructive hover:bg-destructive/10 flex-shrink-0"
                   title="Log out"
                 >
-                  {isLoggingOut ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <LogOut className="h-4 w-4" />
-                  )}
+                  {isLoggingOut ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <LogOut className="h-3.5 w-3.5" />}
                 </Button>
               </div>
 
-              <div className="bg-slate-50 dark:bg-[var(--surface-2)] rounded-2xl p-4 mb-4 flex items-center justify-between border border-slate-100 dark:border-white/5 transition-colors">
-                <div className="space-y-0.5">
-                  <p className="text-[9px] font-black text-indigo-500 dark:text-indigo-400 uppercase tracking-[0.15em]">Pro Plan</p>
-                  <p className="text-[8px] text-slate-400 dark:text-slate-500 font-bold">Renews on Jun 20, 2025</p>
+              {/* Credits bar */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between text-[10px] font-medium">
+                  <span className="text-muted-foreground">SQL Credits</span>
+                  <span className="text-foreground font-semibold">2,450 / 5,000</span>
                 </div>
-                <Button size="sm" className="h-7 px-3 bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] font-black rounded-lg shadow-lg shadow-indigo-600/20 uppercase tracking-wider">
-                  Upgrade
-                </Button>
-              </div>
-
-              <div className="space-y-2.5">
-                <div className="flex items-center justify-between text-[10px] font-black uppercase tracking-widest">
-                  <span className="text-slate-400 dark:text-slate-400">SQL Credits</span>
-                  <span className="text-slate-800 dark:text-white">2,450 / 5,000</span>
-                </div>
-                <div className="h-2 w-full bg-slate-100 dark:bg-slate-900 rounded-full overflow-hidden shadow-inner">
+                <div className="h-1.5 w-full bg-muted rounded-full overflow-hidden">
                   <motion.div
                     initial={{ width: 0 }}
                     animate={{ width: "49%" }}
-                    className="h-full bg-gradient-to-r from-indigo-500 via-indigo-600 to-purple-600 rounded-full"
+                    transition={{ duration: 0.8, ease: "easeOut" }}
+                    className="h-full bg-gradient-to-r from-indigo-500 to-violet-500 rounded-full"
                   />
                 </div>
-                <p className="text-[9px] text-right text-slate-400 dark:text-slate-500 font-bold">49%</p>
               </div>
+
+              {/* Upgrade link */}
+              <Link href="/dashboard/billing">
+                <div className="flex items-center justify-between text-[10px] px-2.5 py-1.5 rounded-lg bg-indigo-500/8 border border-indigo-500/15 cursor-pointer hover:bg-indigo-500/12">
+                  <span className="font-semibold text-indigo-600 dark:text-indigo-400">Free Plan</span>
+                  <span className="text-indigo-500 font-bold">Upgrade →</span>
+                </div>
+              </Link>
             </div>
           )}
 
-          {/* Documentation Link */}
-          <Link href="#" className="flex items-center gap-3 px-5 py-2 text-slate-400 dark:text-slate-500 hover:text-slate-900 dark:hover:text-white transition-all group">
-            <FileText className="h-4 w-4" />
-            {(!collapsed || isMobile) && <span className="text-xs font-black uppercase tracking-widest">Documentation</span>}
-            {(!collapsed || isMobile) && <ExternalLink className="h-3 w-3 ml-auto opacity-0 group-hover:opacity-100 transition-opacity" />}
+          {/* Docs link */}
+          <Link href="#" className={`flex items-center gap-3 px-3 py-2 text-muted-foreground hover:text-foreground hover:bg-accent rounded-xl text-xs group ${collapsed && !isMobile ? "justify-center" : ""}`}>
+            <FileText className="h-4 w-4 flex-shrink-0" />
+            {(!collapsed || isMobile) && <span className="font-medium">Documentation</span>}
+            {(!collapsed || isMobile) && <ExternalLink className="h-3 w-3 ml-auto opacity-0 group-hover:opacity-100" />}
           </Link>
 
-          {/* Log Out Button (when collapsed) */}
-          {(collapsed && !isMobile) && (
+          {/* Logout when collapsed */}
+          {collapsed && !isMobile && (
             <button
               onClick={handleLogout}
               disabled={isLoggingOut}
-              className="flex items-center justify-center w-full py-2 text-slate-400 hover:text-red-500 hover:bg-red-500/10 rounded-xl transition-all cursor-pointer disabled:opacity-50"
+              className="flex items-center justify-center w-full py-2 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-xl"
               title="Log out"
             >
-              {isLoggingOut ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <LogOut className="h-4 w-4" />
-              )}
+              {isLoggingOut ? <Loader2 className="h-4 w-4 animate-spin" /> : <LogOut className="h-4 w-4" />}
             </button>
           )}
         </div>
-        
-        {/* Dynamic Drag Handle */}
+
+        {/* Drag handle */}
         {!isMobile && (
           <div
             onMouseDown={startResizing}
-            className={`absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-indigo-500/60 z-50 transition-all ${
-              isResizing ? "bg-indigo-650 w-[3px] border-r-2 border-indigo-400" : "bg-transparent hover:w-1.5"
+            className={`absolute right-0 top-0 bottom-0 w-1 cursor-col-resize z-50 hover:bg-indigo-500/40 ${
+              isResizing ? "bg-indigo-500/60" : "bg-transparent"
             }`}
           />
         )}
       </motion.aside>
 
-      {/* Main Content Area */}
-      <div className="flex-1 flex flex-col h-full relative overflow-hidden bg-white dark:bg-[var(--surface-0)] transition-colors duration-300">
-        {/* Top Header */}
-        <header className="h-20 flex items-center justify-between px-4 md:px-8 z-20 border-b border-slate-200 dark:border-slate-900/30 transition-colors">
-          <div className="flex items-center gap-3">
+      {/* ── Main content ──────────────────────────────────────────────── */}
+      <div className="flex-1 flex flex-col h-full relative overflow-hidden bg-white/40 dark:bg-black/30 backdrop-blur-sm">
+        {/* Header */}
+        <header className="h-14 flex items-center justify-between px-4 md:px-6 z-20 border-b border-border dark:border-white/10 bg-background/80 dark:bg-black/40 backdrop-blur-md sticky top-0">
+          {/* Left — mobile menu + greeting */}
+          <div className="flex items-center gap-3 min-w-0">
             {isMobile && (
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => setMobileOpen(true)}
-                className="h-10 w-10 text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-white/5 rounded-xl mr-1"
-              >
+              <Button variant="ghost" size="icon" onClick={() => setMobileOpen(true)} className="h-9 w-9 flex-shrink-0">
                 <Menu className="h-5 w-5" />
               </Button>
             )}
-            <div className="flex flex-col">
-              <div className="flex items-center gap-2">
-                <span className="text-xl">👋</span>
-                <h1 className="text-lg md:text-xl font-black text-slate-900 dark:text-white tracking-tight">Welcome back, {firstName}</h1>
-              </div>
-              <p className="hidden md:block text-xs text-slate-500 dark:text-slate-500 font-medium mt-1">Ask questions, analyze data, and get insights from your databases.</p>
+            <div className="min-w-0">
+              <h1 className="text-sm font-semibold text-foreground truncate">
+                Good {new Date().getHours() < 12 ? "morning" : new Date().getHours() < 18 ? "afternoon" : "evening"}, {firstName} 👋
+              </h1>
+              <p className="hidden md:block text-xs text-muted-foreground truncate">
+                Ask anything about your data
+              </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
-            {/* Light / Dark Mode Toggle */}
+          {/* Right — theme toggle + bell */}
+          <div className="flex items-center gap-2 flex-shrink-0">
             {mounted && (
               <button
                 onClick={() => setTheme(isDarkMode ? "light" : "dark")}
-                className="relative flex items-center gap-2.5 px-3 md:px-4 py-2 rounded-xl border text-xs font-black uppercase tracking-widest transition-all duration-300 bg-slate-50 dark:bg-[var(--surface-1)] border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-300 hover:border-indigo-500/50 hover:text-indigo-600 dark:hover:text-white shadow-sm"
+                className="flex items-center gap-2 h-8 px-3 rounded-lg border border-border bg-card text-xs font-medium text-muted-foreground hover:text-foreground hover:border-indigo-500/40 hover:bg-accent"
               >
-                {/* Toggle Track */}
-                <div className="relative h-5 w-9 rounded-full bg-slate-200 dark:bg-indigo-600 transition-colors duration-300">
-                  <div
-                    className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow-md transition-all duration-300 flex items-center justify-center ${
-                      isDarkMode ? "left-[18px]" : "left-0.5"
-                    }`}
-                  >
-                    {isDarkMode
-                      ? <Moon className="h-2.5 w-2.5 text-indigo-600" />
-                      : <Sun className="h-2.5 w-2.5 text-amber-500" />
-                    }
-                  </div>
+                <div className={`relative h-4 w-7 rounded-full transition-colors ${isDarkMode ? "bg-indigo-600" : "bg-slate-200"}`}>
+                  <div className={`absolute top-0.5 h-3 w-3 rounded-full bg-white shadow transition-all ${isDarkMode ? "left-[14px]" : "left-0.5"}`} />
                 </div>
-                <span className="hidden md:inline">{isDarkMode ? "Dark" : "Light"}</span>
+                <span className="hidden sm:inline">{isDarkMode ? "Dark" : "Light"}</span>
               </button>
             )}
-
-            {/* Notification Bell */}
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-10 w-10 rounded-xl relative border text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white bg-slate-50 dark:bg-[var(--surface-1)] border-slate-200 dark:border-slate-800 transition-colors"
-            >
-              <Bell className="h-5 w-5" />
-              <div className="absolute top-2 right-2.5 h-2 w-2 bg-rose-500 rounded-full border-2 border-slate-50 dark:border-[var(--surface-1)]" />
+            <Button variant="ghost" size="icon" className="h-8 w-8 relative">
+              <Bell className="h-4 w-4" />
+              <span className="absolute top-1.5 right-1.5 h-1.5 w-1.5 bg-rose-500 rounded-full" />
             </Button>
           </div>
         </header>
 
-        {/* Page Content */}
-        <div className="flex-1 relative overflow-hidden">
+        {/* Page content */}
+        <div className="flex-1 relative overflow-y-auto overflow-x-hidden">
           {children}
         </div>
       </div>

@@ -5,9 +5,10 @@ import { History, Clock, MessageSquare, ArrowRight } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { useState, useEffect } from "react";
 import Link from "next/link";
+import type { ChatSession } from "@/types";
 
 export default function HistoryPage() {
-  const [historyItems, setHistoryItems] = useState<any[]>([]);
+  const [historyItems, setHistoryItems] = useState<ChatSession[]>([]);
 
   useEffect(() => {
     const savedHistory = localStorage.getItem("chat_sessions");
