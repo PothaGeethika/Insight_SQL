@@ -314,6 +314,7 @@ export default function ChatPage() {
   const [resultsTab, setResultsTab] = useState("results");
 
   const [showWarningModal, setShowWarningModal] = useState(false);
+  const [isTableModalOpen, setIsTableModalOpen] = useState(false);
 
   // Database configuration states inside warning modal
   const [activeConfigDb, setActiveConfigDb] = useState<any | null>(null);
@@ -2995,13 +2996,15 @@ export default function ChatPage() {
                         initial={{ opacity: 0, y: 12 }}
                         animate={{ opacity: 1, y: 0 }}
                         transition={{ delay: 0.15, duration: 0.35 }}
-                        className="rounded-xl border border-slate-200 dark:border-slate-700/50 bg-white dark:bg-slate-900/60 shadow-sm overflow-hidden"
+                        onClick={() => setIsTableModalOpen(true)}
+                        className="rounded-xl border border-slate-200 dark:border-slate-700/50 bg-white dark:bg-slate-900/60 shadow-sm overflow-hidden cursor-pointer hover:border-indigo-500/50 hover:shadow-md transition-all group"
                       >
-                        <div className="px-4 py-3 border-b border-slate-100 dark:border-slate-800/60">
+                        <div className="px-4 py-3 border-b border-slate-100 dark:border-slate-800/60 flex justify-between items-center">
                           <h4 className="text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-widest flex items-center gap-2">
-                            <TableIcon className="h-3.5 w-3.5 text-slate-400" />
+                            <TableIcon className="h-3.5 w-3.5 text-slate-400 group-hover:text-indigo-400 transition-colors" />
                             Data Table
                           </h4>
+                          <span className="text-[10px] text-slate-400 opacity-0 group-hover:opacity-100 transition-opacity">Click to expand</span>
                         </div>
                         <div className="overflow-auto max-h-[360px] custom-scrollbar">
                           <table className="w-full text-xs">
@@ -3147,6 +3150,75 @@ export default function ChatPage() {
               })()}
             </div>
           </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Expanded Full Table Modal */}
+      <AnimatePresence>
+        {isTableModalOpen && activeResult && (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsTableModalOpen(false)}
+              className="absolute inset-0 bg-black/60 backdrop-blur-md"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 15 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 15 }}
+              transition={{ type: "spring", duration: 0.4 }}
+              className="relative bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl w-full max-w-[90vw] shadow-2xl p-6 z-[210] flex flex-col max-h-[90vh] text-slate-900 dark:text-white"
+            >
+              <button
+                onClick={() => setIsTableModalOpen(false)}
+                className="absolute top-4 right-4 text-slate-500 hover:text-white bg-slate-900/30 hover:bg-slate-800/80 p-1.5 rounded-lg transition-colors cursor-pointer"
+              >
+                <X className="h-5 w-5" />
+              </button>
+              
+              <div className="mb-4">
+                <h3 className="text-lg font-bold flex items-center gap-2">
+                  <TableIcon className="h-5 w-5 text-indigo-400" />
+                  Full Data Table
+                </h3>
+              </div>
+
+              <div className="flex-1 overflow-auto custom-scrollbar border border-slate-200 dark:border-slate-800 rounded-lg">
+                <table className="w-full text-sm">
+                  <thead className="sticky top-0 z-10 bg-slate-50 dark:bg-slate-800">
+                    <tr className="text-slate-500 dark:text-slate-400 uppercase tracking-wider text-xs font-bold">
+                      {activeResult.tableData.headers.map((col: string, i: number) => (
+                        <th key={i} className="text-left px-4 py-3 whitespace-nowrap border-b border-slate-200 dark:border-slate-700">
+                          {col.replace(/_/g, " ")}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {activeResult.tableData.rows.map((row: any[], i: number) => (
+                      <tr
+                        key={i}
+                        className={`transition-colors hover:bg-indigo-50/50 dark:hover:bg-indigo-500/10 ${
+                          i % 2 === 0 ? "bg-white dark:bg-transparent" : "bg-slate-50/60 dark:bg-slate-800/30"
+                        }`}
+                      >
+                        {row.map((cell: any, j: number) => (
+                          <td
+                            key={j}
+                            className="px-4 py-2.5 text-slate-700 dark:text-slate-300 whitespace-nowrap border-b border-slate-100 dark:border-slate-800/50"
+                          >
+                            {cell !== null && cell !== undefined ? String(cell) : ""}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </motion.div>
+          </div>
         )}
       </AnimatePresence>
 

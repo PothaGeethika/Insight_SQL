@@ -8,23 +8,7 @@ from logger_config import get_logger
 load_dotenv()
 log = get_logger("database")
 
-# Forbidden SQL statement prefixes that mutate data or schema
-_FORBIDDEN_PATTERN = re.compile(
-    r"^\s*(INSERT|UPDATE|DELETE|DROP|TRUNCATE|ALTER|CREATE|REPLACE|MERGE|CALL|EXEC|EXECUTE|GRANT|REVOKE|LOCK|UNLOCK|RENAME|SET\s+GLOBAL|LOAD\s+DATA)\b",
-    re.IGNORECASE,
-)
-
-def _assert_read_only(sql: str) -> None:
-    """Raises ValueError if the SQL is not a safe read-only statement."""
-    # Strip leading comments before checking
-    stripped = re.sub(r"--[^\n]*", "", sql)
-    stripped = re.sub(r"/\*.*?\*/", "", stripped, flags=re.DOTALL).strip()
-    if _FORBIDDEN_PATTERN.match(stripped):
-        first_word = stripped.split()[0].upper() if stripped.split() else ""
-        log.warning("[DB] Blocked forbidden SQL statement: %s", first_word)
-        raise ValueError(
-            f"Unsafe SQL statement '{first_word}' is not allowed. Only read-only SELECT queries are permitted."
-        )
+# Mutating queries are allowed per user request
 
 class DatabaseManager:
     def __init__(self, database_url=None):
@@ -96,16 +80,23 @@ class DatabaseManager:
         return schema_info
 
     def execute_query(self, sql_query):
-        """Executes a read-only SQL query and returns the results and column headers."""
-        _assert_read_only(sql_query)
+        """Executes a SQL query and returns the results and column headers."""
         log.info("[DB] Executing query on dialect='%s'", self.engine.name)
         log.debug("[DB] SQL:\n%s", sql_query)
         t0 = time.perf_counter()
-        with self.engine.connect() as connection:
+        
+        # Using engine.begin() so mutating queries are automatically committed
+        with self.engine.begin() as connection:
             result = connection.execute(text(sql_query))
-            headers = list(result.keys())
-            rows = [list(row) for row in result.fetchall()]
-            formatted_rows = [[str(cell) for cell in row] for row in rows]
+            if result.returns_rows:
+                headers = list(result.keys())
+                rows = [list(row) for row in result.fetchall()]
+                formatted_rows = [[str(cell) for cell in row] for row in rows]
+            else:
+                # For INSERT/UPDATE/DELETE, return a summary
+                headers = ["Status", "Rows Affected"]
+                formatted_rows = [["Success", str(result.rowcount)]]
+
         elapsed = time.perf_counter() - t0
         log.info("[DB] Query completed in %.3fs – %d row(s) returned, %d column(s).",
                  elapsed, len(formatted_rows), len(headers))

@@ -10,66 +10,14 @@ import urllib.parse
 log = get_logger("connection_manager")
 
 # ---------------------------------------------------------------------------
-# Credential encryption helpers (Fernet symmetric encryption)
+# Encryption disabled per user request
 # ---------------------------------------------------------------------------
-# The key is derived from CONNECTIONS_SECRET env var. If not set, a random
-# key is generated at startup – credentials will be unreadable after restart
-# unless CONNECTIONS_SECRET is set in .env.
-# ---------------------------------------------------------------------------
-
-def _get_fernet():
-    from cryptography.fernet import Fernet
-    raw = os.getenv("CONNECTIONS_SECRET")
-    if raw:
-        # Accept a raw 32-byte URL-safe base64 key or plain text; pad as needed
-        key_bytes = raw.encode()
-        if len(key_bytes) < 32:
-            key_bytes = key_bytes.ljust(32, b"=")
-        key = base64.urlsafe_b64encode(key_bytes[:32])
-    else:
-        log.warning(
-            "[CONN_MGR] CONNECTIONS_SECRET not set – using transient key. "
-            "Credentials will be unreadable after restart. Set CONNECTIONS_SECRET in .env."
-        )
-        key = Fernet.generate_key()
-    return Fernet(key)
-
-
-def _encrypt(value: str) -> str:
-    if not value:
-        return value
-    f = _get_fernet()
-    return f.encrypt(value.encode()).decode()
-
-
-def _decrypt(value: str) -> str:
-    if not value:
-        return value
-    try:
-        f = _get_fernet()
-        return f.decrypt(value.encode()).decode()
-    except Exception:
-        # Value may already be plaintext (legacy, pre-encryption data)
-        return value
-
-
-_SENSITIVE_FIELDS = ("password", "api_key")
-
 
 def _encrypt_record(record: dict) -> dict:
-    out = dict(record)
-    for field in _SENSITIVE_FIELDS:
-        if out.get(field):
-            out[field] = _encrypt(out[field])
-    return out
-
+    return dict(record)
 
 def _decrypt_record(record: dict) -> dict:
-    out = dict(record)
-    for field in _SENSITIVE_FIELDS:
-        if out.get(field):
-            out[field] = _decrypt(out[field])
-    return out
+    return dict(record)
 
 
 # ---------------------------------------------------------------------------
