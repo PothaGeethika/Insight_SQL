@@ -67,10 +67,19 @@ export default function FavoritesPage() {
     const savedFavQueries = JSON.parse(localStorage.getItem("favorite_queries") || "[]");
     setFavQuestions(savedFavQueries);
 
-    // 3. Load Favorite Projects
-    const savedProjects = JSON.parse(localStorage.getItem("insight_projects") || "[]");
-    const favoritedProjects = savedProjects.filter((p: any) => p.isFavorite);
-    setFavProjects(favoritedProjects);
+    // 3. Load Favorite Projects from Backend API
+    fetch("/api/backend/projects")
+      .then(res => res.json())
+      .then(data => {
+        if (Array.isArray(data)) {
+          const favoritedProjects = data.filter((p: any) => p.isFavorite);
+          setFavProjects(favoritedProjects);
+        }
+      })
+      .catch(err => {
+        console.error("Error fetching projects for favorites:", err);
+        setFavProjects([]);
+      });
 
     // 4. Load Favorite History (Sessions)
     const savedSessions = JSON.parse(localStorage.getItem("chat_sessions") || "[]");
@@ -111,16 +120,22 @@ export default function FavoritesPage() {
     setFavQuestions(updated);
   };
 
-  const handleRemoveFavoriteProject = (projectId: string) => {
-    const saved = JSON.parse(localStorage.getItem("insight_projects") || "[]");
-    const updated = saved.map((p: any) => {
-      if (p.id === projectId) {
-        return { ...p, isFavorite: false };
+  const handleRemoveFavoriteProject = async (projectId: string) => {
+    const project = favProjects.find(p => p.id === projectId);
+    if (!project) return;
+    try {
+      const res = await fetch(`/api/backend/projects/${projectId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...project, isFavorite: false }),
+        credentials: "include"
+      });
+      if (res.ok) {
+        loadFavorites();
       }
-      return p;
-    });
-    localStorage.setItem("insight_projects", JSON.stringify(updated));
-    setFavProjects(updated.filter((p: any) => p.isFavorite));
+    } catch (e) {
+      console.error("Error removing favorite project:", e);
+    }
   };
 
   const handleRemoveFavoriteHistory = (sessionId: string) => {

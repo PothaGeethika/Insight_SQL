@@ -1,0 +1,177 @@
+[
+  {
+    "id": "postgresql",
+    "name": "PostgreSQL",
+    "description": "Robust, open-source relational database.",
+    "icon": "https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/postgresql/postgresql-original.svg",
+    "default_port": 5432
+  },
+  {
+    "id": "mysql",
+    "name": "MySQL",
+    "description": "Fast, reliable open-source relational database.",
+    "icon": "https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/mysql/mysql-original.svg",
+    "default_port": 3306
+  },
+  {
+    "id": "mariadb",
+    "name": "MariaDB",
+    "description": "Open-source relational database forked from MySQL.",
+    "icon": "https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/mariadb/mariadb-original.svg",
+    "default_port": 3306
+  },
+  {
+    "id": "oracle",
+    "name": "Oracle",
+    "description": "Enterprise-grade relational database management system.",
+    "icon": "https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/oracle/oracle-original.svg",
+    "default_port": 1521
+  },
+  {
+    "id": "sqlserver",
+    "name": "SQL Server",
+    "description": "Microsoft's enterprise relational database platform.",
+    "icon": "https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/microsoftsqlserver/microsoftsqlserver-plain-wordmark.svg",
+    "default_port": 1433
+  },
+  {
+    "id": "sqlite",
+    "name": "SQLite",
+    "description": "Lightweight, serverless embedded SQL database engine.",
+    "icon": "https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/sqlite/sqlite-original.svg",
+    "default_port": null
+  },
+  {
+    "id": "cockroachdb",
+    "name": "CockroachDB",
+    "description": "Distributed SQL database built for cloud-native applications.",
+    "icon": "https://cdn.simpleicons.org/cockroachlabs/6933FF",
+    "default_port": 26257
+  },
+  {
+    "id": "planetscale",
+    "name": "PlanetScale",
+    "description": "MySQL-compatible serverless database for developers.",
+    "icon": "https://cdn.simpleicons.org/planetscale/f35815",
+    "default_port": 3306
+  },
+  {
+    "id": "tidb",
+    "name": "TiDB",
+    "description": "Distributed, MySQL-compatible HTAP database.",
+    "icon": "https://cdn.simpleicons.org/tidb/E63F2B",
+    "default_port": 4000
+  },
+  {
+    "id": "mongodb",
+    "name": "MongoDB",
+    "description": "Flexible, document-oriented NoSQL database.",
+    "icon": "https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/mongodb/mongodb-original.svg",
+    "default_port": 27017
+  },
+  {
+    "id": "couchdb",
+    "name": "CouchDB",
+    "description": "Open-source document-oriented NoSQL database.",
+    "icon": "https://cdn.simpleicons.org/apachecouchdb/E42528",
+    "default_port": 5984
+  },
+  {
+    "id": "dynamodb",
+    "name": "DynamoDB",
+    "description": "Amazon's fully managed key-value and document NoSQL database.",
+    "icon": "https://api.iconify.design/logos:aws-dynamodb.svg",
+    "default_port": 443
+  },
+  {
+    "id": "redis",
+    "name": "Redis",
+    "description": "In-memory data structure store, cache, and message broker.",
+    "icon": "https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/redis/redis-original.svg",
+    "default_port": 6379
+  },
+  {
+    "id": "cassandra",
+    "name": "Cassandra",
+    "description": "Highly scalable, distributed wide-column NoSQL database.",
+    "icon": "https://cdn.simpleicons.org/apachecassandra/1287B1",
+    "default_port": 9042
+  },
+  {
+    "id": "pinecone",
+    "name": "Pinecone",
+    "description": "Managed vector database for AI and ML applications.",
+    "icon": "https://techicons.dev/api/pinecone",
+    "default_port": 443
+  },
+  {
+    "id": "elasticsearch",
+    "name": "Elasticsearch",
+    "description": "Distributed search and analytics engine.",
+    "icon": "https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/elasticsearch/elasticsearch-original.svg",
+    "default_port": 9200
+  },
+  {
+    "id": "neo4j",
+    "name": "Neo4j",
+    "description": "Graph database for modeling connected data.",
+    "icon": "https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/neo4j/neo4j-original.svg",
+    "default_port": 7687
+  },
+  {
+    "id": "snowflake",
+    "name": "Snowflake",
+    "description": "Cloud data platform and data warehouse for analytics.",
+    "icon": "https://cdn.simpleicons.org/snowflake/29B5E8",
+    "default_port": 443
+  },
+  {
+    "id": "databricks",
+    "name": "Databricks",
+    "description": "Unified analytics platform for big data and machine learning.",
+    "icon": "https://cdn.simpleicons.org/databricks/FF3621",
+    "default_port": 443
+  },
+  {
+    "id": "bigquery",
+    "name": "BigQuery",
+    "description": "Google's fully managed, serverless data warehouse.",
+    "icon": "https://cdn.simpleicons.org/googlebigquery/4285F4",
+    "default_port": 443
+  },
+  {
+    "id": "redshift",
+    "name": "Redshift",
+    "description": "Amazon's fully managed petabyte-scale cloud data warehouse.",
+    "icon": "https://api.iconify.design/logos:aws-redshift.svg",
+    "default_port": 5439
+  },
+  {
+    "id": "clickhouse",
+    "name": "ClickHouse",
+    "description": "Fast, open-source column-oriented OLAP database.",
+    "icon": "https://cdn.simpleicons.org/clickhouse/FFCC01",
+    "default_port": 8123
+  },
+  {
+    "id": "influxdb",
+    "name": "InfluxDB",
+    "description": "Purpose-built time series platform for metrics and events.",
+    "icon": "https://api.iconify.design/logos:influxdb.svg",
+    "default_port": 8086
+  },
+  {
+    "id": "supabase",
+    "name": "Supabase",
+    "description": "Open-source Firebase alternative built on PostgreSQL.",
+    "icon": "https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/supabase/supabase-original.svg",
+    "default_port": 5432
+  },
+  {
+    "id": "other",
+    "name": "Other / Custom",
+    "description": "Connect to any database using a custom connection URI string.",
+    "icon": "__link__",
+    "default_port": null
+  }
+]

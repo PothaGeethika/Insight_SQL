@@ -120,15 +120,27 @@ class ConnectionManager:
 
     def format_connection_url(self, conn: DatabaseConnection) -> str:
         log.debug("[CONN_MGR] Formatting connection URL for type='%s'  name='%s'", conn.type, conn.name)
+        if conn.custom_url:
+            log.debug("[CONN_MGR] Using custom_url directly.")
+            return conn.custom_url
+
         user = urllib.parse.quote_plus(conn.username) if conn.username else ""
         password = urllib.parse.quote_plus(conn.password) if conn.password else ""
 
         if conn.type == "sqlite":
             url = f"sqlite:///{conn.database}"
-        elif conn.type == "postgresql":
+        elif conn.type in ["postgresql", "supabase", "redshift"]:
             url = f"postgresql://{user}:{password}@{conn.host}:{conn.port}/{conn.database}"
-        elif conn.type == "mysql":
+        elif conn.type in ["mysql", "mariadb"]:
             url = f"mysql+pymysql://{user}:{password}@{conn.host}:{conn.port}/{conn.database}"
+        elif conn.type == "oracle":
+            url = f"oracle+cx_oracle://{user}:{password}@{conn.host}:{conn.port}/{conn.database}"
+        elif conn.type == "sqlserver":
+            url = f"mssql+pyodbc://{user}:{password}@{conn.host}:{conn.port}/{conn.database}?driver=ODBC+Driver+17+for+SQL+Server"
+        elif conn.type == "redis":
+            url = f"redis://{user}:{password}@{conn.host}:{conn.port}/{conn.database}"
+        elif conn.type == "clickhouse":
+            url = f"clickhouse+native://{user}:{password}@{conn.host}:{conn.port}/{conn.database}"
         elif conn.type == "mongodb":
             if user and password:
                 url = f"mongodb://{user}:{password}@{conn.host}:{conn.port}/{conn.database}?authSource=admin"
@@ -167,8 +179,14 @@ class ConnectionManager:
             else:
                 url = f"{scheme}://{host_part}{port_part}"
         else:
-            log.error("[CONN_MGR] Unsupported database type: '%s'", conn.type)
-            raise ValueError(f"Unsupported database type: {conn.type}")
+            # Fallback for any other custom SQL databases
+            host_part = conn.host or "localhost"
+            port_part = f":{conn.port}" if conn.port else ""
+            db_part = f"/{conn.database}" if conn.database else ""
+            if user and password:
+                url = f"{conn.type}://{user}:{password}@{host_part}{port_part}{db_part}"
+            else:
+                url = f"{conn.type}://{host_part}{port_part}{db_part}"
 
         safe_url = url.replace(urllib.parse.quote_plus(conn.password), "****") if conn.password else url
         log.debug("[CONN_MGR] Built URL: %s", safe_url)

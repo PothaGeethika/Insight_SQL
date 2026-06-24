@@ -137,8 +137,35 @@ def _build_db_manager(conn):
 
 
 # ---------------------------------------------------------------------------
-# Database connection endpoints
+# Database catalog – loaded dynamically from db_types_config.json.
+# To add / remove / edit a database type, just edit that JSON file and
+# restart the server.  No Python code changes required.
 # ---------------------------------------------------------------------------
+
+_CATALOG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "db_types_config.json")
+
+def _load_db_types_catalog() -> list:
+    """Load the DB-types catalog from the JSON config file.
+    Returns an empty list (not an error) if the file is missing or malformed,
+    so the frontend can fall back to its own built-in catalog."""
+    try:
+        with open(_CATALOG_PATH, "r", encoding="utf-8") as f:
+            catalog = json.load(f)
+        log.info("[CATALOG] Loaded %d database type(s) from %s", len(catalog), _CATALOG_PATH)
+        return catalog
+    except FileNotFoundError:
+        log.warning("[CATALOG] db_types_config.json not found at '%s'.", _CATALOG_PATH)
+        return []
+    except Exception as exc:
+        log.error("[CATALOG] Failed to parse db_types_config.json: %s", exc)
+        return []
+
+
+@app.get("/databases/types")
+def get_database_types(current_user: dict = Depends(get_current_user)):
+    log.info("[API] GET /databases/types  user=%s", current_user["id"])
+    return _load_db_types_catalog()
+
 
 @app.get("/databases")
 def get_databases(current_user: dict = Depends(get_current_user)):
@@ -159,7 +186,10 @@ def test_database_connection(
              request.type, request.host, request.database)
     try:
         cm = ConnectionManager()
-        if request.type == "snowflake":
+        if request.custom_url:
+            # Skip field validations since full connection URI is provided
+            pass
+        elif request.type == "snowflake":
             if not request.account or not request.database:
                 return {"status": "error", "message": "Account Identifier and Database name are required for Snowflake."}
         elif request.type not in ["sqlite", "mongodb", "neo4j"] and (not request.host or not request.database):
@@ -168,24 +198,30 @@ def test_database_connection(
         dummy_conn = DatabaseConnection(**request.dict())
         db_url = cm.format_connection_url(dummy_conn)
 
-        if request.type == "mongodb":
+        # Detect actual type from URL or request type
+        is_mongodb = request.type == "mongodb" or db_url.startswith("mongodb://") or db_url.startswith("mongodb+srv://")
+        is_snowflake = request.type == "snowflake" or db_url.startswith("snowflake://")
+        is_neo4j = request.type == "neo4j" or db_url.startswith("neo4j://") or db_url.startswith("neo4j+s://") or db_url.startswith("bolt://") or db_url.startswith("bolt+s://")
+        is_elasticsearch = request.type == "elasticsearch" or db_url.startswith("elasticsearch://")
+
+        if is_mongodb:
             from pymongo import MongoClient
             client = MongoClient(db_url, serverSelectionTimeoutMS=5000)
             client.admin.command('ping')
             return {"status": "success", "message": "Connection successful! MongoDB is reachable."}
-        elif request.type == "snowflake":
+        elif is_snowflake:
             from sqlalchemy import create_engine, text as sa_text
             engine = create_engine(db_url)
             with engine.connect() as conn:
                 conn.execute(sa_text("SELECT 1"))
             return {"status": "success", "message": "Connection successful! Snowflake is reachable."}
-        elif request.type == "elasticsearch":
+        elif is_elasticsearch:
             from elasticsearch_database import ElasticsearchDatabaseManager
             es_mgr = ElasticsearchDatabaseManager(db_url)
             if es_mgr.client.ping():
                 return {"status": "success", "message": "Connection successful! Elasticsearch is reachable."}
             raise Exception("Elasticsearch ping failed.")
-        elif request.type == "neo4j":
+        elif is_neo4j:
             from neo4j_database import Neo4jDatabaseManager
             neo_mgr = Neo4jDatabaseManager(db_url)
             neo_mgr.driver.verify_connectivity()
@@ -1022,4 +1058,4 @@ def health_check():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import * as React from "react";
 import { toast } from "sonner";
 import { motion, AnimatePresence } from "framer-motion";
-import { Plus, MoreHorizontal, X, ChevronDown, CheckCircle2, AlertCircle, Loader2, Edit, Trash2, Link, Unlink, Star } from "lucide-react";
+import { Plus, MoreHorizontal, X, ChevronDown, CheckCircle2, AlertCircle, Loader2, Edit, Trash2, Link, Unlink, Star, Database, Cloud, Server, Search, ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -28,87 +28,129 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 
-const DB_TYPES = [
-  {
-    id: "postgresql",
-    name: "PostgreSQL",
-    description: "Robust, open-source relational database.",
-    icon: (
-      <div className="h-10 w-10 rounded-xl bg-blue-500/10 flex items-center justify-center">
-        <span className="text-xl">🐘</span>
-      </div>
-    ),
-  },
-  {
-    id: "mysql",
-    name: "MySQL",
-    description: "Fast, reliable relational database.",
-    icon: (
-      <div className="h-10 w-10 rounded-xl bg-sky-500/10 flex items-center justify-center">
-        <span className="text-xl">🐬</span>
-      </div>
-    ),
-  },
-  {
-    id: "mongodb",
-    name: "MongoDB",
-    description: "Flexible, document-oriented database.",
-    icon: (
-      <div className="h-10 w-10 rounded-xl bg-green-500/10 flex items-center justify-center">
-        <span className="text-xl">🍃</span>
-      </div>
-    ),
-  },
-  {
-    id: "vector",
-    name: "Vector DB",
-    description: "Store and query vector embeddings at scale.",
-    icon: (
-      <div className="h-10 w-10 rounded-xl bg-purple-500/10 flex items-center justify-center">
-        <div className="h-6 w-6 rounded-full border-2 border-dashed border-purple-500 flex items-center justify-center">
-          <div className="h-2 w-2 bg-purple-500 rounded-full" />
-        </div>
-      </div>
-    ),
-  },
-  {
-    id: "neo4j",
-    name: "Neo4j",
-    description: "Model and query data relationships.",
-    icon: (
-      <div className="h-10 w-10 rounded-xl bg-indigo-500/10 flex items-center justify-center">
-        <div className="flex items-center justify-center gap-1">
-          <div className="h-2 w-2 bg-indigo-500 rounded-full" />
-          <div className="h-[2px] w-2 bg-indigo-500/50" />
-          <div className="h-2 w-2 bg-indigo-500 rounded-full" />
-        </div>
-      </div>
-    ),
-  },
-  {
-    id: "elasticsearch",
-    name: "Elasticsearch",
-    description: "Distributed search and analytics engine.",
-    icon: (
-      <div className="h-10 w-10 rounded-xl bg-amber-500/10 flex items-center justify-center">
-        <span className="text-xl">🔍</span>
-      </div>
-    ),
-  },
-  {
-    id: "snowflake",
-    name: "SnowFlake",
-    description: "Cloud-hosted data warehouse optimized for analytics.",
-    icon: (
-      <div className="h-10 w-10 rounded-xl bg-cyan-500/10 flex items-center justify-center">
-        <span className="text-xl">❄️</span>
-      </div>
-    ),
-  },
+/**
+ * DynamicIcon — renders either:
+ *   • an <img> for http(s) icon URLs (with graceful onError fallback to Database icon)
+ *   • a Lucide icon component for named string icons ("Link", "Cloud", "Server")
+ *   • the generic <Database> icon for everything else / failures
+ */
+function DynamicIcon({ icon, className = "h-5 w-5" }: { icon: string; className?: string }) {
+  const [imgError, setImgError] = React.useState(false);
+
+  if (!icon || imgError) return <Database className={className} />;
+
+  if (icon.startsWith("http")) {
+    return (
+      <img
+        src={icon}
+        alt="db icon"
+        className={`object-contain ${className}`}
+        onError={() => setImgError(true)}
+      />
+    );
+  }
+
+  if (icon === "Cloud") return <Cloud className={className} />;
+  if (icon === "Link" || icon === "__link__") return <Link className={className} />;
+  if (icon === "Server") return <Server className={className} />;
+
+  return <Database className={className} />;
+}
+
+/**
+ * resolveCardDbInfo — dynamically resolves the display info (name, description, icon URL)
+ * for a saved database connection, even for custom/unknown types.
+ *
+ * Resolution order:
+ *  1. Exact catalog match by type ID
+ *  2. If type is "other", extract protocol from custom_url and try again
+ *  3. Fall back to Simple Icons CDN for any recognised or unknown protocol
+ *     (the DynamicIcon onError handler handles 404s gracefully)
+ */
+function resolveCardDbInfo(card: any, catalog: any[]) {
+  // 1. Direct catalog lookup
+  let entry = catalog.find((d: any) => d.id === card.type);
+  if (entry) return entry;
+
+  // 2. Extract protocol from custom_url if type is "other" or not found
+  let resolvedType = card.type as string;
+  if (card.custom_url) {
+    const m = (card.custom_url as string).match(/^([a-zA-Z][a-zA-Z0-9+\-.]*):\/\//);
+    if (m) {
+      const protocol = m[1].toLowerCase().replace(/\+.*$/, "");
+      entry = catalog.find((d: any) => d.id === protocol);
+      if (entry) return entry;
+      resolvedType = protocol;
+    }
+  }
+
+  // 3. Fully dynamic: try Simple Icons CDN for the resolved type
+  const displayName =
+    resolvedType.length > 0
+      ? resolvedType.charAt(0).toUpperCase() + resolvedType.slice(1)
+      : "Custom";
+  return {
+    name: displayName,
+    description: "Custom Database Connection",
+    icon: `https://cdn.simpleicons.org/${resolvedType}`,
+  };
+}
+
+/**
+ * FALLBACK_DB_TYPES — client-side catalog used while the backend response is loading
+ * or if the /databases/types endpoint is unavailable.
+ * Icons use Simple Icons CDN (https://cdn.simpleicons.org/{slug}) — official brand logos.
+ * The canonical source of truth is backend/db_types_config.json.
+ */
+// ---------------------------------------------------------------------------
+// Icon URLs — Strategy per database:
+//   • Devicon (devicons/devicon CDN): full-color SVGs for widely-supported DBs
+//   • Simple Icons CDN with explicit brand hex:  cdn.simpleicons.org/{slug}/{hex}
+//     - Hex color appended so brand color is embedded in the SVG fill,
+//       ensuring icons display correctly on both light and dark backgrounds.
+//   • techicons.dev — fallback CDN for DBs missing from Simple Icons (Pinecone)
+// ---------------------------------------------------------------------------
+const FALLBACK_DB_TYPES = [
+  // ── Relational ──────────────────────────────────────────────────────────
+  { id: "postgresql",  name: "PostgreSQL",    description: "Robust, open-source relational database.",                              icon: "https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/postgresql/postgresql-original.svg" },
+  { id: "mysql",       name: "MySQL",          description: "Fast, reliable open-source relational database.",                       icon: "https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/mysql/mysql-original.svg" },
+  { id: "mariadb",     name: "MariaDB",        description: "Open-source relational database forked from MySQL.",                    icon: "https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/mariadb/mariadb-original.svg" },
+  { id: "oracle",      name: "Oracle",         description: "Enterprise-grade relational database management system.",               icon: "https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/oracle/oracle-original.svg" },
+  { id: "sqlserver",   name: "SQL Server",     description: "Microsoft's enterprise relational database platform.",                  icon: "https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/microsoftsqlserver/microsoftsqlserver-plain-wordmark.svg" },
+  { id: "sqlite",      name: "SQLite",         description: "Lightweight, serverless embedded SQL database engine.",                 icon: "https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/sqlite/sqlite-original.svg" },
+  { id: "cockroachdb", name: "CockroachDB",    description: "Distributed SQL database built for cloud-native applications.",         icon: "https://cdn.simpleicons.org/cockroachlabs/6933FF" },
+  { id: "planetscale", name: "PlanetScale",    description: "MySQL-compatible serverless database for developers.",                  icon: "https://cdn.simpleicons.org/planetscale/f35815" },
+  { id: "tidb",        name: "TiDB",           description: "Distributed, MySQL-compatible HTAP database.",                          icon: "https://cdn.simpleicons.org/tidb/E63F2B" },
+  // ── NoSQL / Document ────────────────────────────────────────────────────
+  { id: "mongodb",     name: "MongoDB",        description: "Flexible, document-oriented NoSQL database.",                           icon: "https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/mongodb/mongodb-original.svg" },
+  { id: "couchdb",     name: "CouchDB",        description: "Open-source document-oriented NoSQL database.",                        icon: "https://cdn.simpleicons.org/apachecouchdb/E42528" },
+  { id: "dynamodb",    name: "DynamoDB",       description: "Amazon's fully managed key-value and document NoSQL database.",         icon: "https://api.iconify.design/logos:aws-dynamodb.svg" },
+  { id: "redis",       name: "Redis",          description: "In-memory data structure store, cache, and message broker.",            icon: "https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/redis/redis-original.svg" },
+  { id: "cassandra",   name: "Cassandra",      description: "Highly scalable, distributed wide-column NoSQL database.",              icon: "https://cdn.simpleicons.org/apachecassandra/1287B1" },
+  { id: "pinecone",    name: "Pinecone",       description: "Managed vector database for AI and ML applications.",                   icon: "https://techicons.dev/api/pinecone" },
+  // ── Search & Graph ──────────────────────────────────────────────────────
+  { id: "elasticsearch", name: "Elasticsearch", description: "Distributed search and analytics engine.",                            icon: "https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/elasticsearch/elasticsearch-original.svg" },
+  { id: "neo4j",       name: "Neo4j",          description: "Graph database for modeling connected data.",                           icon: "https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/neo4j/neo4j-original.svg" },
+  // ── Cloud Warehouses ────────────────────────────────────────────────────
+  { id: "snowflake",   name: "Snowflake",      description: "Cloud data platform and data warehouse for analytics.",                 icon: "https://cdn.simpleicons.org/snowflake/29B5E8" },
+  { id: "databricks",  name: "Databricks",     description: "Unified analytics platform for big data and machine learning.",         icon: "https://cdn.simpleicons.org/databricks/FF3621" },
+  { id: "bigquery",    name: "BigQuery",       description: "Google's fully managed, serverless data warehouse.",                    icon: "https://cdn.simpleicons.org/googlebigquery/4285F4" },
+  { id: "redshift",    name: "Redshift",       description: "Amazon's fully managed petabyte-scale cloud data warehouse.",           icon: "https://api.iconify.design/logos:aws-redshift.svg" },
+  // ── OLAP & Analytics ────────────────────────────────────────────────────
+  { id: "clickhouse",  name: "ClickHouse",     description: "Fast, open-source column-oriented OLAP database.",                     icon: "https://cdn.simpleicons.org/clickhouse/FFCC01" },
+  { id: "influxdb",    name: "InfluxDB",       description: "Purpose-built time series platform for metrics and events.",            icon: "https://api.iconify.design/logos:influxdb.svg" },
+  // ── BaaS / Hosted ───────────────────────────────────────────────────────
+  { id: "supabase",    name: "Supabase",       description: "Open-source Firebase alternative built on PostgreSQL.",                 icon: "https://cdn.jsdelivr.net/gh/devicons/devicon@latest/icons/supabase/supabase-original.svg" },
+  // ── Custom ──────────────────────────────────────────────────────────────
+  { id: "other",       name: "Other / Custom", description: "Connect to any database using a custom connection URI string.",         icon: "__link__" },
 ];
+
 
 export default function DatabasesPage() {
   const [showAddForm, setShowAddForm] = useState(false);
+  const [modalStep, setModalStep] = useState<1 | 2>(1);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [dbTypes, setDbTypes] = useState<any[]>(FALLBACK_DB_TYPES);
   const [connections, setConnections] = useState<any[]>([]);
   const [editingConnection, setEditingConnection] = useState<any | null>(null);
   const [dbFavorites, setDbFavorites] = useState<string[]>([]);
@@ -154,6 +196,8 @@ export default function DatabasesPage() {
     setApiKey("");
     setCloudId("");
     setTestResult(null);
+    setModalStep(1);
+    setSearchQuery("");
   };
 
   const getDefaultPort = (type: string) => {
@@ -180,6 +224,22 @@ export default function DatabasesPage() {
     }
   };
 
+  const fetchDbTypes = async () => {
+    try {
+      const res = await fetch("/api/backend/databases/types");
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data) && data.length > 0) {
+          setDbTypes(data);
+          return;
+        }
+      }
+    } catch (e) {
+      console.error("Failed to fetch DB types from backend, using local fallback", e);
+    }
+    setDbTypes(FALLBACK_DB_TYPES);
+  };
+
   const handleToggleFavoriteDb = (dbId: string) => {
     const favs = JSON.parse(localStorage.getItem("db_favorites") || "[]");
     let updated;
@@ -194,6 +254,7 @@ export default function DatabasesPage() {
 
   useEffect(() => {
     fetchConnections();
+    fetchDbTypes();
     const favs = JSON.parse(localStorage.getItem("db_favorites") || "[]");
     setDbFavorites(favs);
   }, []);
@@ -380,9 +441,10 @@ export default function DatabasesPage() {
       payload = {
         name: displayName || `${parsed.type}_${parsed.database}`,
         type: parsed.type,
-        database: parsed.database,
-        username: parsed.username,
-        password: parsed.password
+        database: parsed.database || "",
+        username: parsed.username || "",
+        password: parsed.password || "",
+        custom_url: connectionString
       };
       if (parsed.type === 'snowflake') {
         payload.account = (parsed as any).account;
@@ -534,60 +596,37 @@ export default function DatabasesPage() {
         </div>
 
         {/* Databases Grid */}
-        <motion.div
-          variants={containerVariants}
-          initial="hidden"
-          animate="show"
-          className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"
-        >
-          {(() => {
-            const cardsToRender = connections.map(conn => ({
-              id: conn.id,
-              type: conn.type,
-              name: conn.name,
-              dbType: conn.type,
-              isPlaceholder: false,
-              isConnected: conn.is_default,
-              conn: conn
-            }));
-
-            if (cardsToRender.length === 0) {
-              return (
-                <div className="col-span-full flex flex-col items-center justify-center text-center py-20 px-4 border border-dashed border-slate-800 rounded-3xl bg-slate-900/10 max-w-xl mx-auto my-10">
-                  <div className="h-16 w-16 rounded-2xl bg-indigo-500/10 flex items-center justify-center text-indigo-400 mb-6 border border-indigo-500/25">
-                    <Plus className="h-8 w-8 animate-pulse" />
-                  </div>
-                  <h3 className="text-xl font-bold text-white mb-3">No Databases Connected</h3>
-                  <p className="text-sm text-slate-400 mb-6 leading-relaxed max-w-sm">
-                    Connect and manage all your data sources. Add your first database connection to get started with natural language queries!
-                  </p>
-                  <Button
-                    onClick={() => {
-                      setDbType("postgresql");
-                      setEditingConnection(null);
-                      clearForm();
-                      setConnectionMethod("string");
-                      setShowAddForm(true);
-                    }}
-                    className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold h-11 px-8 rounded-xl shadow-lg shadow-indigo-600/20 cursor-pointer flex items-center gap-2 animate-bounce"
-                  >
-                    <Plus className="h-4 w-4" /> Add First Database
-                  </Button>
-                </div>
-              );
-            }
-
-            return cardsToRender.map((card) => {
-              const dbInfo = DB_TYPES.find(d => d.id === card.dbType) || {
-                id: card.dbType,
-                name: card.dbType.toUpperCase(),
-                description: `Connect to a ${card.dbType} database.`,
-                icon: (
-                  <div className="h-10 w-10 rounded-xl bg-slate-500/10 flex items-center justify-center">
-                    <span className="text-xl">🔌</span>
-                  </div>
-                )
-              };
+        {connections.length === 0 ? (
+          <div className="flex flex-col items-center justify-center text-center py-20 px-4 border border-dashed border-slate-800 rounded-3xl bg-slate-900/10 max-w-xl mx-auto my-10">
+            <div className="h-16 w-16 rounded-2xl bg-indigo-500/10 flex items-center justify-center text-indigo-400 mb-6 border border-indigo-500/25">
+              <Plus className="h-8 w-8 animate-pulse" />
+            </div>
+            <h3 className="text-xl font-bold text-white mb-3">No Databases Connected</h3>
+            <p className="text-sm text-slate-400 mb-6 leading-relaxed max-w-sm">
+              Connect and manage all your data sources. Add your first database connection to get started with natural language queries!
+            </p>
+            <Button
+              onClick={() => {
+                setDbType("postgresql");
+                setEditingConnection(null);
+                clearForm();
+                setConnectionMethod("string");
+                setShowAddForm(true);
+              }}
+              className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold h-11 px-8 rounded-xl shadow-lg shadow-indigo-600/20 cursor-pointer flex items-center gap-2 animate-bounce"
+            >
+              <Plus className="h-4 w-4" /> Add First Database
+            </Button>
+          </div>
+        ) : (
+          <motion.div
+            variants={containerVariants}
+            initial="hidden"
+            animate="show"
+            className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6"
+          >
+            {connections.map((card) => {
+              const dbInfo = resolveCardDbInfo(card, dbTypes);
 
               return (
                 <motion.div
@@ -595,18 +634,20 @@ export default function DatabasesPage() {
                   variants={itemVariants}
                   className="bg-[var(--surface-1)] border border-slate-800/50 hover:border-slate-700 rounded-2xl p-6 transition-all duration-300 flex flex-col h-full"
                 >
-                  <div className="flex items-start justify-between mb-6">
-                    {dbInfo.icon}
+                  <div className="flex items-start justify-between">
+                    <div className="h-10 w-10 flex items-center justify-center rounded-xl bg-indigo-500/10 border border-indigo-500/20">
+                      <DynamicIcon icon={dbInfo.icon} className="h-6 w-6 text-indigo-400" />
+                    </div>
                     <DropdownMenu>
                       <DropdownMenuTrigger className="h-8 w-8 inline-flex items-center justify-center text-slate-500 hover:text-white hover:bg-slate-800 rounded-lg -mr-2 -mt-2 border-0 bg-transparent cursor-pointer focus:outline-none focus:ring-2 focus:ring-indigo-500/50 transition-colors">
                         <MoreHorizontal className="h-4 w-4" />
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end" className="w-48 bg-slate-900 border border-slate-800 text-slate-200 rounded-xl shadow-xl p-1">
                         <DropdownMenuItem
-                          onClick={() => handleToggleConnect(card.conn)}
+                          onClick={() => handleToggleConnect(card)}
                           className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-slate-800 hover:text-white rounded-lg text-sm font-medium transition-colors"
                         >
-                          {card.isConnected ? (
+                          {card.is_default ? (
                             <>
                               <Unlink className="h-4 w-4 text-amber-500" />
                               <span>Disconnect</span>
@@ -628,7 +669,7 @@ export default function DatabasesPage() {
                         </DropdownMenuItem>
 
                         <DropdownMenuItem
-                          onClick={() => startEdit(card.conn)}
+                          onClick={() => startEdit(card)}
                           className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-slate-800 hover:text-white rounded-lg text-sm font-medium transition-colors"
                         >
                           <Edit className="h-4 w-4 text-blue-500" />
@@ -636,7 +677,7 @@ export default function DatabasesPage() {
                         </DropdownMenuItem>
 
                         <DropdownMenuItem
-                          onClick={() => handleDelete(card.conn.id)}
+                          onClick={() => handleDelete(card.id)}
                           className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-red-500/10 hover:text-red-400 text-red-500 rounded-lg text-sm font-medium transition-colors"
                         >
                           <Trash2 className="h-4 w-4" />
@@ -646,7 +687,7 @@ export default function DatabasesPage() {
                     </DropdownMenu>
                   </div>
 
-                  <div className="flex-1">
+                  <div className="flex-1 mt-4">
                     <h3 className="text-lg font-bold text-white mb-2 flex items-center gap-2">
                       {card.name}
                       {dbFavorites.includes(card.id) && (
@@ -662,24 +703,24 @@ export default function DatabasesPage() {
                   <div className="mt-auto flex items-center">
                     <button
                       type="button"
-                      onClick={() => handleToggleConnect(card.conn)}
-                      className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border transition-all duration-200 ${card.isConnected
+                      onClick={() => handleToggleConnect(card)}
+                      className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border transition-all duration-200 ${card.is_default
                         ? 'bg-emerald-500/10 border-emerald-500/20 hover:bg-emerald-500/20 text-emerald-400 cursor-pointer shadow-md shadow-emerald-500/5'
                         : 'bg-slate-800/50 border-slate-700/50 hover:bg-slate-700/50 text-slate-400 cursor-pointer'
                         }`}
-                      title={card.isConnected ? "Click to Disconnect" : "Click to Connect"}
+                      title={card.is_default ? "Click to Disconnect" : "Click to Connect"}
                     >
-                      <div className={`h-2 w-2 rounded-full ${card.isConnected ? 'bg-emerald-500 animate-pulse' : 'bg-slate-500'}`} />
+                      <div className={`h-2 w-2 rounded-full ${card.is_default ? 'bg-emerald-500 animate-pulse' : 'bg-slate-500'}`} />
                       <span className="text-xs font-bold">
-                        {card.isConnected ? 'Connected' : 'Not Connected'}
+                        {card.is_default ? 'Connected' : 'Not Connected'}
                       </span>
                     </button>
                   </div>
                 </motion.div>
               );
-            });
-          })()}
-        </motion.div>
+            })}
+          </motion.div>
+        )}
 
         {/* Add/Edit Database Centered Popup Modal */}
         <AnimatePresence>
@@ -724,50 +765,80 @@ export default function DatabasesPage() {
                     {editingConnection ? "Edit Database Connection" : "Add Database"}
                   </h2>
                   <p className="text-slate-400 font-medium">
-                    Provide credentials or a connection string to link your database.
+                    {modalStep === 1 && !editingConnection 
+                      ? "Select a database type to connect." 
+                      : "Provide credentials or a connection string to link your database."}
                   </p>
                 </div>
 
                 <div className="space-y-6 overflow-y-auto pr-1 flex-1">
-                  {/* Type Select & Display Name in a 2-Column Grid */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {/* Database Type Select */}
-                    <div className="space-y-3">
-                      <label className="text-sm font-bold text-slate-300">Select Database Type</label>
-                      <Select value={dbType} onValueChange={(val) => val && setDbType(val)}>
-                        <SelectTrigger className="w-full bg-[var(--surface-0)] border-slate-800 h-12 rounded-xl px-4 text-white hover:border-slate-700">
-                          <SelectValue placeholder="Select type" />
-                        </SelectTrigger>
-                        <SelectContent className="bg-[var(--surface-1)] border-slate-800 text-white">
-                          {DB_TYPES.map(db => (
-                            <SelectItem key={db.id} value={db.id} className="cursor-pointer hover:bg-slate-800">
-                              <div className="flex items-center gap-3 py-1">
-                                <span className="font-bold">{db.name}</span>
-                              </div>
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                  {modalStep === 1 && !editingConnection ? (
+                    <div className="space-y-4">
+                      <div className="relative">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+                        <Input
+                          value={searchQuery}
+                          onChange={(e) => setSearchQuery(e.target.value)}
+                          placeholder="Search databases (e.g. Postgres, Redis...)"
+                          className="w-full bg-[var(--surface-0)] border-slate-800 focus:border-indigo-500 h-12 pl-10 rounded-xl text-sm placeholder:text-slate-600 text-white"
+                        />
+                      </div>
+                      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+                        {dbTypes.filter(db => db.name.toLowerCase().includes(searchQuery.toLowerCase()) || db.description.toLowerCase().includes(searchQuery.toLowerCase())).map(db => (
+                          <button
+                            key={db.id}
+                            onClick={() => {
+                              setDbType(db.id);
+                              setModalStep(2);
+                              if (db.id === 'other') {
+                                setConnectionMethod('string');
+                              }
+                              setPort(getDefaultPort(db.id).toString());
+                            }}
+                            className="flex flex-col items-center justify-center gap-3 p-4 rounded-xl border border-slate-800/60 bg-[var(--surface-0)] hover:bg-slate-800/50 hover:border-indigo-500/50 transition-all text-center group h-32"
+                          >
+                            <DynamicIcon icon={db.icon} className="h-10 w-10 text-slate-400 group-hover:text-white transition-colors" />
+                            <span className="text-sm font-bold text-slate-300 group-hover:text-white">{db.name}</span>
+                          </button>
+                        ))}
+                      </div>
                     </div>
+                  ) : (
+                    <>
+                      {/* Back button if came from step 1 */}
+                      {!editingConnection && (
+                        <Button variant="ghost" className="mb-4 -ml-2 text-slate-400 hover:text-white" onClick={() => setModalStep(1)}>
+                          <ArrowLeft className="h-4 w-4 mr-2" /> Back to Catalog
+                        </Button>
+                      )}
+                      
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="space-y-3">
+                          <label className="text-sm font-bold text-slate-300">Selected Database</label>
+                          <div className="flex items-center gap-3 h-12 px-4 rounded-xl border border-slate-800 bg-[var(--surface-0)]">
+                            <DynamicIcon icon={dbTypes.find(d => d.id === dbType)?.icon || ""} className="h-5 w-5" />
+                            <span className="font-bold text-white">{dbTypes.find(d => d.id === dbType)?.name || dbType}</span>
+                          </div>
+                        </div>
 
-                    {/* Project Name Input */}
-                    <div className="space-y-3">
-                      <label className="text-sm font-bold text-slate-300">Project Name</label>
-                      <Input
-                        value={displayName}
-                        onChange={(e) => setDisplayName(e.target.value)}
-                        placeholder="e.g., Sales Analysis Project"
-                        className="bg-[var(--surface-0)] border-slate-800 focus:border-indigo-500 h-12 rounded-xl text-sm placeholder:text-slate-600 text-white"
-                      />
-                    </div>
-                  </div>
+                        {/* Project Name Input */}
+                        <div className="space-y-3">
+                          <label className="text-sm font-bold text-slate-300">Project Name</label>
+                          <Input
+                            value={displayName}
+                            onChange={(e) => setDisplayName(e.target.value)}
+                            placeholder="e.g., Sales Analysis Project"
+                            className="bg-[var(--surface-0)] border-slate-800 focus:border-indigo-500 h-12 rounded-xl text-sm placeholder:text-slate-600 text-white"
+                          />
+                        </div>
+                      </div>
 
-                  {/* Connection Details Section */}
-                  <div className="space-y-4 pt-4 border-t border-slate-800/50">
+                      {/* Connection Details Section */}
+                      <div className="space-y-4 pt-4 border-t border-slate-800/50">
                     <div className="flex items-center justify-between">
                       <h3 className="text-sm font-bold text-white uppercase tracking-wider">Connection Details</h3>
 
-                      {/* Method Toggle Tab */}
+                      {/* Method Toggle Tab — shown for ALL database types including Other/Custom */}
                       <div className="flex gap-1 p-0.5 bg-slate-900 border border-slate-800 rounded-lg">
                         <button
                           type="button"
@@ -1015,12 +1086,20 @@ export default function DatabasesPage() {
                         <Input
                           value={connectionString}
                           onChange={(e) => setConnectionString(e.target.value)}
-                          placeholder={dbType === 'snowflake'
-                            ? "snowflake://username:password@account/database/schema?warehouse=wh&role=rl"
-                            : `${dbType}://username:password@host:port/database`}
+                          placeholder={
+                            dbType === 'snowflake'
+                              ? "snowflake://username:password@account/database/schema?warehouse=wh&role=rl"
+                              : dbType === 'other'
+                              ? "e.g., pinecone://api-key@controller.pinecone.io/my-index  or  databricks://token@workspace.net/sql"
+                              : `${dbType}://username:password@host:port/database`
+                          }
                           className="bg-[var(--surface-0)] border-slate-800 focus:border-indigo-500 h-12 rounded-xl text-sm placeholder:text-slate-600 font-mono text-white"
                         />
-                        <p className="text-xs text-slate-500 font-medium">Provide a valid {dbType} connection string.</p>
+                        <p className="text-xs text-slate-500 font-medium">
+                          {dbType === 'other'
+                            ? "Enter a full connection URI — the protocol prefix (e.g. pinecone://, databricks://) determines the database driver used."
+                            : `Provide a valid ${dbType} connection string.`}
+                        </p>
                       </div>
                     )}
 
@@ -1087,6 +1166,8 @@ export default function DatabasesPage() {
                       </Button>
                     </div>
                   </div>
+                    </>
+                  )}
                 </div>
               </motion.div>
             </div>

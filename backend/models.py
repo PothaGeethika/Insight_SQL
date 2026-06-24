@@ -21,6 +21,7 @@ class DatabaseConnection(BaseModel):
     # Elasticsearch-specific fields
     api_key: Optional[str] = None
     cloud_id: Optional[str] = None
+    custom_url: Optional[str] = None
 
 class ConnectionRequest(BaseModel):
     name: str
@@ -38,6 +39,7 @@ class ConnectionRequest(BaseModel):
     # Elasticsearch-specific fields
     api_key: Optional[str] = None
     cloud_id: Optional[str] = None
+    custom_url: Optional[str] = None
 
 class QueryRequest(BaseModel):
     question: str

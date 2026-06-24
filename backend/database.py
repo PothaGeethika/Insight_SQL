@@ -73,8 +73,26 @@ class DatabaseManager:
                     for col in columns:
                         schema_info += f"  - {col[1]} ({col[2]})\n"
             else:
-                log.warning("[DB] Schema retrieval not implemented for dialect='%s'", self.engine.name)
-                schema_info = "Schema retrieval not fully implemented for this database type."
+                try:
+                    log.debug("[DB] Attempting standard information_schema query for dialect='%s'.", self.engine.name)
+                    # Use a generic query that works on most SQL databases supporting information_schema
+                    query = text("""
+                        SELECT table_name, column_name, data_type
+                        FROM information_schema.columns
+                        WHERE table_schema NOT IN ('information_schema', 'pg_catalog')
+                        ORDER BY table_name, ordinal_position;
+                    """)
+                    result = connection.execute(query)
+                    current_table = ""
+                    for row in result:
+                        table_name, column_name, data_type = row
+                        if table_name != current_table:
+                            schema_info += f"\nTable: {table_name}\n"
+                            current_table = table_name
+                        schema_info += f"  - {column_name} ({data_type})\n"
+                except Exception as ex:
+                    log.warning("[DB] Schema retrieval fallback failed for dialect='%s': %s", self.engine.name, ex)
+                    schema_info = f"Schema retrieval not fully implemented or failed for database type '{self.engine.name}'."
 
         log.info("[DB] Schema fetched – %d chars returned.", len(schema_info))
         return schema_info

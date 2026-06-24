@@ -304,7 +304,24 @@ class SQLAgent:
         chain = prompt | llm | self.parser
 
         t0 = time.perf_counter()
-        response = chain.invoke({"history_text": history_text, "schema": schema})
+        response = None
+        try:
+            response = chain.invoke({"history_text": history_text, "schema": schema})
+        except Exception as first_err:
+            log.warning("[SUGGESTIONS] Primary provider '%s' failed: %s. Falling back to Gemini...", provider, first_err)
+            try:
+                fallback_llm = self.get_llm("gemini", temperature=0.7)
+                fallback_chain = prompt | fallback_llm | self.parser
+                response = fallback_chain.invoke({"history_text": history_text, "schema": schema})
+            except Exception as second_err:
+                log.error("[SUGGESTIONS] Fallback Gemini also failed: %s", second_err)
+                return [
+                    "Show database tables list",
+                    "Count total records in main table",
+                    "Preview first 10 rows of active table",
+                    "Explain the database schema"
+                ]
+
         elapsed = time.perf_counter() - t0
         log.debug("[SUGGESTIONS] LLM responded in %.2fs", elapsed)
 
@@ -318,7 +335,12 @@ class SQLAgent:
         except Exception as e:
             log.error("[SUGGESTIONS] JSON parse error: %s. Raw response: %s", e, response)
             
-        return []
+        return [
+            "Show database tables list",
+            "Count total records in main table",
+            "Preview first 10 rows of active table",
+            "Explain the database schema"
+        ]
 
     def generate_dashboard_queries(self, schema, provider="gemini", model_name=None):
         """Generates 4 diverse SQL queries for a dashboard based on the schema."""
@@ -349,7 +371,19 @@ class SQLAgent:
         chain = prompt | llm | self.parser
 
         t0 = time.perf_counter()
-        response = chain.invoke({"schema": schema})
+        response = None
+        try:
+            response = chain.invoke({"schema": schema})
+        except Exception as first_err:
+            log.warning("[DASHBOARD] Primary provider '%s' failed: %s. Falling back to Gemini...", provider, first_err)
+            try:
+                fallback_llm = self.get_llm("gemini", temperature=0.7)
+                fallback_chain = prompt | fallback_llm | self.parser
+                response = fallback_chain.invoke({"schema": schema})
+            except Exception as second_err:
+                log.error("[DASHBOARD] Fallback Gemini also failed: %s", second_err)
+                return []
+
         elapsed = time.perf_counter() - t0
         log.debug("[DASHBOARD] LLM responded in %.2fs", elapsed)
 
@@ -383,7 +417,19 @@ class SQLAgent:
         chain = prompt | llm | self.parser
 
         t0 = time.perf_counter()
-        title = chain.invoke({"question": question, "response": response_text})
+        title = None
+        try:
+            title = chain.invoke({"question": question, "response": response_text})
+        except Exception as first_err:
+            log.warning("[SUMMARIZE] Primary provider '%s' failed: %s. Falling back to Gemini...", provider, first_err)
+            try:
+                fallback_llm = self.get_llm("gemini")
+                fallback_chain = prompt | fallback_llm | self.parser
+                title = fallback_chain.invoke({"question": question, "response": response_text})
+            except Exception as second_err:
+                log.error("[SUMMARIZE] Fallback Gemini also failed: %s", second_err)
+                return "Data Query Summary"
+
         elapsed = time.perf_counter() - t0
         title = title.strip().strip('"').strip("'")
         log.info("[SUMMARIZE] Title generated in %.2fs: '%s'", elapsed, title)
@@ -441,14 +487,15 @@ class SQLAgent:
         """Synthesizes a natural language answer based on query results."""
         log.info("[SYNTHESIZE] Building natural language answer – provider='%s'", provider)
         log.info("[SYNTHESIZE] Result set: %d rows × %d columns", len(rows), len(headers))
+        
+        # Truncate row count to save tokens – keep first 30 rows for synthesis
+        truncated_rows = rows[:30]
+        if len(rows) > 30:
+            log.warning("[SYNTHESIZE] Result has %d rows – truncating to 35 for LLM synthesis", len(rows))
+
         try:
             llm = self.get_llm(provider, model_name)
             chain = self.synthesize_prompt | llm | self.parser
-
-            # Truncate row count to save tokens – keep first 30 rows for synthesis
-            truncated_rows = rows[:30]
-            if len(rows) > 30:
-                log.warning("[SYNTHESIZE] Result has %d rows – truncating to 30 for LLM synthesis", len(rows))
 
             t0 = time.perf_counter()
             response = chain.invoke({
@@ -460,5 +507,19 @@ class SQLAgent:
             log.info("[SYNTHESIZE] Answer synthesized in %.2fs (%d chars)", elapsed, len(response))
             return response.strip()
         except Exception as e:
-            log.error("[SYNTHESIZE] Failed to synthesize answer: %s", e, exc_info=True)
-            return None
+            log.warning("[SYNTHESIZE] Primary provider '%s' failed: %s. Falling back to Gemini...", provider, e)
+            try:
+                fallback_llm = self.get_llm("gemini")
+                fallback_chain = self.synthesize_prompt | fallback_llm | self.parser
+                t0 = time.perf_counter()
+                response = fallback_chain.invoke({
+                    "question": question,
+                    "headers": json.dumps(headers),
+                    "rows": json.dumps(truncated_rows)
+                })
+                elapsed = time.perf_counter() - t0
+                log.info("[SYNTHESIZE] Answer synthesized with Gemini in %.2fs", elapsed)
+                return response.strip()
+            except Exception as second_err:
+                log.error("[SYNTHESIZE] Fallback Gemini also failed: %s", second_err, exc_info=True)
+                return f"Failed to synthesize explanation due to API limitations. Query succeeded with {len(rows)} row(s)."
