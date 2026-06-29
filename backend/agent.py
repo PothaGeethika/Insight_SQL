@@ -166,6 +166,15 @@ class SQLAgent:
 
     def get_llm(self, provider, model_name=None, temperature=0):
         log.debug("[LLM] Selecting provider='%s' model='%s' temp=%s", provider, model_name, temperature)
+        if provider not in ["gemini", "groq", "deepseek", "ollama"]:
+            log.warning("[LLM] Provider '%s' unsupported. Falling back to gemini or groq.", provider)
+            if os.getenv("GROQ_API_KEY") and not os.getenv("GROQ_API_KEY").startswith("ssh-"):
+                provider = "groq"
+                model_name = "llama-3.1-70b-versatile"
+            else:
+                provider = "gemini"
+                model_name = "gemini-2.0-flash"
+
         if provider == "gemini":
             api_key = os.getenv("GEMINI_API_KEY")
             if not api_key:
@@ -174,7 +183,8 @@ class SQLAgent:
             return ChatGoogleGenerativeAI(
                 model=model_name or "gemini-2.0-flash",
                 google_api_key=api_key,
-                temperature=temperature
+                temperature=temperature,
+                max_retries=0
             )
         elif provider == "groq":
             api_key = os.getenv("GROQ_API_KEY")
@@ -184,7 +194,8 @@ class SQLAgent:
             return ChatGroq(
                 model=model_name or "llama-3.1-70b-versatile",
                 groq_api_key=api_key,
-                temperature=temperature
+                temperature=temperature,
+                max_retries=0
             )
         elif provider == "deepseek":
             api_key = os.getenv("DEEPSEEK_API_KEY")
@@ -195,7 +206,8 @@ class SQLAgent:
                 model=model_name or "deepseek-chat",
                 api_key=api_key,
                 base_url="https://api.deepseek.com/v1",
-                temperature=temperature
+                temperature=temperature,
+                max_retries=0
             )
         elif provider == "ollama":
             base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
@@ -205,9 +217,6 @@ class SQLAgent:
                 base_url=base_url,
                 temperature=temperature
             )
-        else:
-            log.error("[LLM] Unsupported provider requested: '%s'", provider)
-            raise ValueError(f"Unsupported provider: {provider}")
 
     def generate_query(self, question, schema, db_type="postgresql", provider="gemini", model_name=None):
         """Generates either a SQL query or MQL JSON based on the database type."""
@@ -523,3 +532,52 @@ class SQLAgent:
             except Exception as second_err:
                 log.error("[SYNTHESIZE] Fallback Gemini also failed: %s", second_err, exc_info=True)
                 return f"Failed to synthesize explanation due to API limitations. Query succeeded with {len(rows)} row(s)."
+
+    def optimize_query(self, query, explain_json, schema, provider="gemini", model_name=None):
+        """Analyzes a slow query and its execution plan, and suggests optimizations."""
+        log.info("[OPTIMIZE] ── Analyzing slow query execution plan ──────────────────")
+        
+        optimize_prompt = ChatPromptTemplate.from_template("""
+        You are a Senior Database Administrator. Analyze the following slow SQL query and its execution plan.
+        Identify the primary bottlenecks (e.g., Sequential/Full Table Scans, Nested Loops).
+        Suggest actionable optimizations, particularly indexing strategies or query rewrites.
+        
+        Schema:
+        {schema}
+        
+        Slow Query:
+        {query}
+        
+        Execution Plan (JSON):
+        {explain_json}
+        
+        Please format your response as a JSON object with two fields:
+        1. "analysis": A clear, concise explanation of the bottleneck.
+        2. "recommendation": The specific SQL statement to fix it (e.g., CREATE INDEX ...). If rewriting the query is better, provide the rewritten query.
+        
+        Output ONLY the JSON object. Do not include markdown formatting like ```json.
+        """)
+        
+        llm = self.get_llm(provider, model_name, temperature=0)
+        chain = optimize_prompt | llm | self.parser
+        
+        t0 = time.perf_counter()
+        result = chain.invoke({
+            "query": query,
+            "explain_json": json.dumps(explain_json),
+            "schema": schema
+        })
+        elapsed = time.perf_counter() - t0
+        
+        cleaned = result.strip().replace("```json", "").replace("```", "").strip()
+        log.info("[OPTIMIZE] Optimization suggestion generated in %.2fs", elapsed)
+        
+        try:
+            return json.loads(cleaned)
+        except json.JSONDecodeError:
+            log.error("[OPTIMIZE] Failed to parse JSON from LLM: %s", cleaned)
+            return {
+                "analysis": "Could not parse analysis. The query may require missing indexes.",
+                "recommendation": "-- Unable to generate specific recommendation."
+            }
+

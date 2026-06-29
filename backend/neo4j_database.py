@@ -143,3 +143,39 @@ class Neo4jDatabaseManager:
         except Exception as e:
             log.error("[NEO4J] Execution error: %s", e, exc_info=True)
             raise Exception(f"Neo4j execution error: {str(e)}")
+
+    def explain_query(self, cypher_query: str):
+        """Runs EXPLAIN to get the query execution plan."""
+        log.info("[NEO4J] Explaining Cypher query")
+        if not NEO4J_AVAILABLE:
+            raise ImportError("neo4j package not installed.")
+            
+        try:
+            cypher_query = cypher_query.strip().replace("```cypher", "").replace("```", "").strip()
+            explain_query = f"EXPLAIN {cypher_query}"
+            log.debug("[NEO4J] SQL/Cypher:\n%s", explain_query)
+            t0 = time.perf_counter()
+            with self.driver.session() as session:
+                result = session.run(explain_query)
+                info = result.consume()
+                if info.plan:
+                    def plan_to_dict(plan_obj):
+                        if not plan_obj: return None
+                        return {
+                            "operatorType": plan_obj.operator_type,
+                            "identifiers": plan_obj.identifiers,
+                            "arguments": plan_obj.arguments,
+                            "children": [plan_to_dict(c) for c in plan_obj.children]
+                        }
+                    plan_json = plan_to_dict(info.plan)
+                else:
+                    plan_json = {"message": "No explain plan returned"}
+                
+                elapsed = time.perf_counter() - t0
+                log.info("[NEO4J] EXPLAIN completed in %.3fs", elapsed)
+                return plan_json
+                
+        except Exception as e:
+            log.error("[NEO4J] EXPLAIN error: %s", e, exc_info=True)
+            raise Exception(f"Neo4j EXPLAIN error: {str(e)}")
+

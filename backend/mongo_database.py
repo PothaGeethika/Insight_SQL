@@ -124,3 +124,43 @@ class MongoDatabaseManager:
             
         except Exception as e:
             raise Exception(f"MongoDB execution error: {str(e)}")
+
+    def explain_query(self, mql_json):
+        log.info("[MONGO] Explaining MQL query")
+        if not PYMONGO_AVAILABLE:
+            raise ImportError("pymongo is not installed.")
+            
+        try:
+            if isinstance(mql_json, str):
+                mql_json = mql_json.strip().replace("```json", "").replace("```", "").strip()
+                mql_json = json.loads(mql_json)
+            
+            collection_name = mql_json.get("collection")
+            action = mql_json.get("action", "find")
+            query = mql_json.get("query", {})
+            projection = mql_json.get("projection")
+            limit = mql_json.get("limit", 100)
+            
+            if not collection_name:
+                raise ValueError("Collection name is required in MQL JSON.")
+                
+            collection = self.db[collection_name]
+            
+            t0 = time.perf_counter()
+            if action == "find":
+                plan = collection.find(query, projection).limit(limit).explain()
+            elif action == "aggregate":
+                pipeline = mql_json.get("pipeline", [])
+                plan = self.db.command('aggregate', collection_name, pipeline=pipeline, explain=True)
+            elif action == "count":
+                plan = {"message": "Count queries do not support detailed execution plans in this wrapper."}
+            else:
+                raise ValueError(f"Unsupported MongoDB action for explain: {action}")
+            elapsed = time.perf_counter() - t0
+                
+            log.info("[MONGO] Explain completed in %.3fs.", elapsed)
+            return plan
+            
+        except Exception as e:
+            raise Exception(f"MongoDB explain error: {str(e)}")
+

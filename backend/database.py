@@ -119,3 +119,33 @@ class DatabaseManager:
         log.info("[DB] Query completed in %.3fs – %d row(s) returned, %d column(s).",
                  elapsed, len(formatted_rows), len(headers))
         return headers, formatted_rows
+
+    def explain_query(self, sql_query):
+        """Runs EXPLAIN (FORMAT JSON) or equivalent to get the query execution plan."""
+        log.info("[DB] Running EXPLAIN on dialect='%s'", self.engine.name)
+        log.debug("[DB] SQL:\n%s", sql_query)
+        
+        explain_sql = sql_query
+        if self.engine.name == 'postgresql':
+            explain_sql = f"EXPLAIN (FORMAT JSON) {sql_query}"
+        elif self.engine.name == 'mysql':
+            explain_sql = f"EXPLAIN FORMAT=JSON {sql_query}"
+        elif self.engine.name == 'sqlite':
+            explain_sql = f"EXPLAIN QUERY PLAN {sql_query}"
+        else:
+            explain_sql = f"EXPLAIN {sql_query}"
+            
+        t0 = time.perf_counter()
+        
+        with self.engine.begin() as connection:
+            result = connection.execute(text(explain_sql))
+            rows = [list(row) for row in result.fetchall()]
+            
+        elapsed = time.perf_counter() - t0
+        log.info("[DB] EXPLAIN completed in %.3fs", elapsed)
+        
+        if self.engine.name in ['postgresql', 'mysql']:
+            return rows[0][0]
+        else:
+            return {"plan_text": rows}
+

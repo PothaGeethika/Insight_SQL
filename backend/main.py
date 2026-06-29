@@ -12,7 +12,7 @@ import sys
 import time
 from pathlib import Path
 from dotenv import load_dotenv
-from models import QueryRequest, ConnectionRequest, DatabaseConnection
+from models import QueryRequest, ConnectionRequest, DatabaseConnection, ExplainRequest, OptimizeRequest
 from typing import Any, Dict, List, Optional
 from agent import SQLAgent
 from connection_manager import ConnectionManager
@@ -689,6 +689,64 @@ def generate_dashboard(
         log.error("[API] Error in /dashboard-generate: %s\n%s", e, traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@app.post("/explain")
+@limiter.limit("10/minute")
+def explain_query_api(
+    request: Request,
+    payload: ExplainRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    log.info("[API] POST /explain user=%s", current_user["id"])
+    if not payload.connection_id:
+        raise HTTPException(status_code=400, detail="connection_id is required")
+        
+    conn = connection_manager.get_connection(payload.connection_id)
+    if not conn:
+        raise HTTPException(status_code=404, detail="Database connection not found")
+        
+    try:
+        db_manager = _build_db_manager(conn)
+        if not hasattr(db_manager, "explain_query"):
+            raise HTTPException(status_code=400, detail="EXPLAIN is not supported for this database type.")
+            
+        plan_json = db_manager.explain_query(payload.query)
+        return {"plan": plan_json}
+    except Exception as e:
+        log.error("[API] Error in /explain: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/optimize")
+@limiter.limit("10/minute")
+def optimize_query_api(
+    request: Request,
+    payload: OptimizeRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    log.info("[API] POST /optimize user=%s", current_user["id"])
+    if not payload.connection_id:
+        raise HTTPException(status_code=400, detail="connection_id is required")
+        
+    conn = connection_manager.get_connection(payload.connection_id)
+    if not conn:
+        raise HTTPException(status_code=404, detail="Database connection not found")
+        
+    try:
+        db_manager = _build_db_manager(conn)
+        schema = db_manager.get_schema()
+        
+        optimization = sql_agent.optimize_query(
+            query=payload.query,
+            explain_json=payload.explain_json,
+            schema=schema,
+            provider=payload.provider,
+            model_name=payload.model
+        )
+        return optimization
+    except Exception as e:
+        log.error("[API] Error in /optimize: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/suggest")
 @limiter.limit(os.getenv("SUGGEST_RATE_LIMIT", "60/minute"))

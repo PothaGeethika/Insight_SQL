@@ -3,9 +3,12 @@
 import { useState, useEffect } from "react";
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { Bookmark, Search, Filter, Trash2, ArrowRight, Clock, Plus } from "lucide-react";
+import { Bookmark, Search, Filter, Trash2, ArrowRight, Clock, Plus, Activity, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { VisualExplain } from "@/components/VisualExplain";
+import { toast } from "sonner";
 import { Card, CardContent } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
@@ -27,6 +30,14 @@ export default function SavedQueriesPage() {
   const [dateFilter, setDateFilter] = useState("all");
   const [queries, setQueries] = useState<any[]>([]);
 
+  const [isExplainModalOpen, setIsExplainModalOpen] = useState(false);
+  const [explainData, setExplainData] = useState<any>(null);
+  const [explainQuery, setExplainQuery] = useState("");
+  const [isOptimizingExplain, setIsOptimizingExplain] = useState(false);
+  const [explainOptimization, setExplainOptimization] = useState<any>(null);
+  const [isFetchingExplain, setIsFetchingExplain] = useState(false);
+  const [activeExplainConnectionId, setActiveExplainConnectionId] = useState("");
+
   useEffect(() => {
     try {
       const saved = localStorage.getItem("favorite_queries");
@@ -37,6 +48,7 @@ export default function SavedQueriesPage() {
           title: item.question || "Generated SQL Query",
           sql: item.sql || "",
           database: item.database || "PostgreSQL",
+          connection_id: item.connection_id || null,
           sessionId: item.sessionId || null,
           date: new Date(item.timestamp || Date.now()).toLocaleDateString('en-US', {
             month: 'short',
@@ -62,6 +74,69 @@ export default function SavedQueriesPage() {
       }
     } catch (e) {
       console.error("Failed to delete query", e);
+    }
+  };
+
+  const handleAnalyzePerformance = async (query: string, connection_id?: string) => {
+    if (!query) return;
+    if (!connection_id) {
+      toast.error("No database connection associated with this saved query.");
+      return;
+    }
+    setIsExplainModalOpen(true);
+    setExplainQuery(query);
+    setExplainData(null);
+    setExplainOptimization(null);
+    setIsFetchingExplain(true);
+    setActiveExplainConnectionId(connection_id);
+    
+    try {
+      const res = await fetch("/api/backend/explain", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query, connection_id }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setExplainData(data.plan);
+      } else {
+        toast.error("Failed to explain query: " + (data.detail || "Unknown error"));
+        setIsExplainModalOpen(false);
+      }
+    } catch (e) {
+      toast.error("Error analyzing performance.");
+      setIsExplainModalOpen(false);
+    } finally {
+      setIsFetchingExplain(false);
+    }
+  };
+
+  const handleOptimizeExplain = async () => {
+    if (!activeExplainConnectionId || !explainQuery || !explainData) return;
+    setIsOptimizingExplain(true);
+    
+    try {
+      const res = await fetch("/api/backend/optimize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ 
+          query: explainQuery, 
+          explain_json: explainData,
+          connection_id: activeExplainConnectionId,
+          provider: "gemini",
+          model: "gemini-2.0-flash"
+        }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setExplainOptimization(data);
+      } else {
+        toast.error("Failed to optimize query: " + (data.detail || "Unknown error"));
+      }
+    } catch (e) {
+      toast.error("Error optimizing performance.");
+    } finally {
+      setIsOptimizingExplain(false);
     }
   };
 
@@ -208,10 +283,18 @@ export default function SavedQueriesPage() {
                       variant="ghost" 
                       size="icon" 
                       onClick={() => handleDelete(q.id)}
-                      className="h-9 w-9 text-slate-500 hover:text-red-500 hover:bg-red-500/10 rounded-xl transition-all cursor-pointer"
+                      className="h-9 w-9 text-slate-500 hover:text-red-500 hover:bg-red-500/10 rounded-xl transition-all cursor-pointer mr-2"
                       title="Delete Saved Query"
                     >
                       <Trash2 className="h-4 w-4" />
+                    </Button>
+                    <Button 
+                      variant="outline"
+                      onClick={() => handleAnalyzePerformance(q.sql, q.connection_id)}
+                      className="h-9 px-4 border border-slate-800 text-slate-300 hover:text-blue-500 hover:border-blue-500/50 hover:bg-blue-500/10 text-[10px] font-black rounded-xl uppercase tracking-widest gap-2 transition-all cursor-pointer"
+                    >
+                      <Activity className="h-3.5 w-3.5" />
+                      Analyze
                     </Button>
                     <Button 
                       onClick={() => handleRunQuery(q)}
@@ -245,6 +328,38 @@ export default function SavedQueriesPage() {
           )}
         </div>
       </ScrollArea>
+
+      <Dialog open={isExplainModalOpen} onOpenChange={setIsExplainModalOpen}>
+        <DialogContent className="max-w-[90vw] w-[1200px] h-[90vh] flex flex-col p-6 border-slate-800 bg-[#0a0a0f] text-slate-200">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-xl text-white">
+              <Activity className="h-6 w-6 text-blue-500" />
+              Visual EXPLAIN PLAN
+            </DialogTitle>
+            <DialogDescription className="text-slate-400">
+              Interactive query execution plan analysis
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="flex-1 flex flex-col gap-4 overflow-hidden mt-4">
+            {isFetchingExplain ? (
+              <div className="flex-1 flex flex-col items-center justify-center text-slate-400 gap-4">
+                <Loader2 className="h-8 w-8 animate-spin text-blue-500" />
+                <p>Generating execution plan...</p>
+              </div>
+            ) : explainData ? (
+              <VisualExplain 
+                plan={explainData} 
+                query={explainQuery} 
+                connectionId={activeExplainConnectionId}
+                optimization={explainOptimization}
+                isOptimizing={isOptimizingExplain}
+                onOptimize={handleOptimizeExplain}
+              />
+            ) : null}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

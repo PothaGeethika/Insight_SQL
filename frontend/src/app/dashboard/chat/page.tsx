@@ -91,6 +91,8 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { VisualExplain } from "@/components/VisualExplain";
 import { useState, useRef, useEffect } from "react";
 import { toast } from "sonner";
 import ReactMarkdown from 'react-markdown';
@@ -316,6 +318,13 @@ export default function ChatPage() {
   const [showWarningModal, setShowWarningModal] = useState(false);
   const [isTableModalOpen, setIsTableModalOpen] = useState(false);
 
+  const [isExplainModalOpen, setIsExplainModalOpen] = useState(false);
+  const [explainData, setExplainData] = useState<any>(null);
+  const [explainQuery, setExplainQuery] = useState("");
+  const [isOptimizingExplain, setIsOptimizingExplain] = useState(false);
+  const [explainOptimization, setExplainOptimization] = useState<any>(null);
+  const [isFetchingExplain, setIsFetchingExplain] = useState(false);
+
   // Database configuration states inside warning modal
   const [activeConfigDb, setActiveConfigDb] = useState<any | null>(null);
   const [dbType, setDbType] = useState("postgresql");
@@ -540,6 +549,68 @@ export default function ChatPage() {
       setTestResult({ status: 'error', message: "Failed to connect to backend server." });
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const handleAnalyzePerformance = async (query: string) => {
+    if (!query) return;
+    if (!selectedDb) {
+      toast.error("Please select a database from the dropdown above to analyze performance.");
+      return;
+    }
+    setIsExplainModalOpen(true);
+    setExplainQuery(query);
+    setExplainData(null);
+    setExplainOptimization(null);
+    setIsFetchingExplain(true);
+    
+    try {
+      const res = await fetch("/api/backend/explain", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query, connection_id: selectedDb }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setExplainData(data.plan);
+      } else {
+        toast.error("Failed to explain query: " + (data.detail || "Unknown error"));
+        setIsExplainModalOpen(false);
+      }
+    } catch (e) {
+      toast.error("Error analyzing performance.");
+      setIsExplainModalOpen(false);
+    } finally {
+      setIsFetchingExplain(false);
+    }
+  };
+
+  const handleOptimizeExplain = async () => {
+    if (!selectedDb || !explainQuery || !explainData) return;
+    setIsOptimizingExplain(true);
+    
+    try {
+      const res = await fetch("/api/backend/optimize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ 
+          query: explainQuery, 
+          explain_json: explainData,
+          connection_id: selectedDb,
+          provider,
+          model
+        }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setExplainOptimization(data);
+      } else {
+        toast.error("Failed to optimize query: " + (data.detail || "Unknown error"));
+      }
+    } catch (e) {
+      toast.error("Error optimizing performance.");
+    } finally {
+      setIsOptimizingExplain(false);
     }
   };
 
@@ -1254,7 +1325,8 @@ export default function ChatPage() {
         tableData: assistantMsg?.tableData || null,
         timestamp: userMsg.timestamp || Date.now(),
         sessionId: currentSessionId,
-        database: dbName
+        database: dbName,
+        connection_id: selectedDb
       });
       updatedFavs = favs;
       setSavedQueryIds(prev => {
@@ -2060,6 +2132,7 @@ export default function ChatPage() {
                   else if (val === "openai") setModel("gpt-4o");
                   else if (val === "anthropic") setModel("claude-3-5-sonnet");
                   else if (val === "deepseek") setModel("deepseek-v4-pro");
+                  else if (val === "groq") setModel("llama-3.3-70b-versatile");
                 }
               }}>
                 <SelectTrigger className="h-8 w-32 text-xs text-slate-900 dark:text-slate-200">
@@ -2070,6 +2143,7 @@ export default function ChatPage() {
                   <SelectItem value="openai">🤖 OpenAI</SelectItem>
                   <SelectItem value="anthropic">🧠 Anthropic</SelectItem>
                   <SelectItem value="deepseek">🐋 DeepSeek</SelectItem>
+                  <SelectItem value="groq">⚡ Groq</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -2101,6 +2175,12 @@ export default function ChatPage() {
                     <>
                       <SelectItem value="deepseek-v4-pro">DeepSeek V4 Pro</SelectItem>
                       <SelectItem value="deepseek-v4-flash">DeepSeek V4 Flash</SelectItem>
+                    </>
+                  )}
+                  {provider === "groq" && (
+                    <>
+                      <SelectItem value="llama-3.3-70b-versatile">Llama 3.3 70B</SelectItem>
+                      <SelectItem value="mixtral-8x7b-32768">Mixtral 8x7B</SelectItem>
                     </>
                   )}
                 </SelectContent>
@@ -2468,7 +2548,16 @@ export default function ChatPage() {
                             )}
                           </TabsContent>
  
-                          <TabsContent value="sql" className="p-4 pt-3">
+                          <TabsContent value="sql" className="p-4 pt-3 relative">
+                            <Button 
+                              variant="outline" 
+                              size="sm" 
+                              className="absolute top-6 right-6 gap-2 bg-background/80 backdrop-blur-sm shadow-sm"
+                              onClick={() => handleAnalyzePerformance(msg.generated_query || msg.sql || "")}
+                            >
+                              <Activity className="h-4 w-4 text-blue-500" />
+                              Analyze Performance
+                            </Button>
                             <pre className="text-xs font-mono bg-muted dark:bg-[#0d0d14] text-emerald-600 dark:text-emerald-400 border border-border rounded-lg p-4 overflow-x-auto leading-relaxed">
                               <code>{msg.generated_query || msg.sql}</code>
                             </pre>
@@ -3729,6 +3818,38 @@ export default function ChatPage() {
           </div>
         )}
       </AnimatePresence>
+
+      <Dialog open={isExplainModalOpen} onOpenChange={setIsExplainModalOpen}>
+        <DialogContent className="max-w-[90vw] w-[1200px] h-[90vh] flex flex-col p-6">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-xl">
+              <Activity className="h-6 w-6 text-blue-500" />
+              Visual EXPLAIN PLAN
+            </DialogTitle>
+            <DialogDescription>
+              Interactive query execution plan analysis
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="flex-1 flex flex-col gap-4 overflow-hidden mt-4">
+            {isFetchingExplain ? (
+              <div className="flex-1 flex flex-col items-center justify-center text-muted-foreground gap-4">
+                <Loader2 className="h-8 w-8 animate-spin text-blue-500" />
+                <p>Generating execution plan...</p>
+              </div>
+            ) : explainData ? (
+              <VisualExplain 
+                plan={explainData} 
+                query={explainQuery} 
+                connectionId={selectedDb}
+                optimization={explainOptimization}
+                isOptimizing={isOptimizingExplain}
+                onOptimize={handleOptimizeExplain}
+              />
+            ) : null}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

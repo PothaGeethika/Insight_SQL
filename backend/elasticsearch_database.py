@@ -221,3 +221,37 @@ class ElasticsearchDatabaseManager:
         except Exception as e:
             log.error("[ELASTIC] Execution error: %s", e, exc_info=True)
             raise Exception(f"Elasticsearch query error: {str(e)}")
+
+    def explain_query(self, es_query_json: str):
+        log.info("[ELASTIC] Explaining Elasticsearch query")
+        if not ES_AVAILABLE:
+            raise ImportError("elasticsearch package not installed.")
+            
+        try:
+            if isinstance(es_query_json, str):
+                es_query_json = es_query_json.strip().replace("```json", "").replace("```", "").strip()
+                log.debug("[ELASTIC] Raw DSL Query:\n%s", es_query_json)
+                es_query = json.loads(es_query_json)
+            else:
+                es_query = es_query_json
+
+            index = es_query.get("index") or self.index_name
+            if not index:
+                raise ValueError("An 'index' must be specified in the query JSON if not provided in connection.")
+
+            if "index" in es_query:
+                del es_query["index"]
+                
+            es_query["profile"] = True
+            
+            t0 = time.perf_counter()
+            result = self.client.search(index=index, body=es_query)
+            elapsed = time.perf_counter() - t0
+            
+            plan_json = result.get("profile", {"message": "No profile data returned"})
+            log.info("[ELASTIC] EXPLAIN completed in %.3fs", elapsed)
+            return plan_json
+        except Exception as e:
+            log.error("[ELASTIC] EXPLAIN error: %s", e, exc_info=True)
+            raise Exception(f"Elasticsearch EXPLAIN error: {str(e)}")
+

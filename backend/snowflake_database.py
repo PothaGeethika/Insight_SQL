@@ -77,3 +77,29 @@ class SnowflakeDatabaseManager:
         except Exception as e:
             log.error("[SNOWFLAKE] Execution error: %s", e, exc_info=True)
             raise Exception(f"Snowflake execution error: {str(e)}")
+
+    def explain_query(self, sql_query: str):
+        """Runs EXPLAIN USING JSON to get the query execution plan."""
+        log.info("[SNOWFLAKE] Running EXPLAIN")
+        log.debug("[SNOWFLAKE] SQL:\n%s", sql_query)
+        try:
+            explain_sql = f"EXPLAIN USING JSON {sql_query}"
+            t0 = time.perf_counter()
+            with self.engine.connect() as conn:
+                result = conn.execute(text(explain_sql))
+                row = result.fetchone()
+                if row and row[0]:
+                    import json
+                    try:
+                        plan_json = json.loads(row[0])
+                    except:
+                        plan_json = {"plan": row[0]}
+                else:
+                    plan_json = {"message": "No explain plan returned"}
+            elapsed = time.perf_counter() - t0
+            log.info("[SNOWFLAKE] EXPLAIN completed in %.3fs", elapsed)
+            return plan_json
+        except Exception as e:
+            log.error("[SNOWFLAKE] EXPLAIN error: %s", e, exc_info=True)
+            raise Exception(f"Snowflake EXPLAIN error: {str(e)}")
+

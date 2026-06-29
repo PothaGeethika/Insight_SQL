@@ -1,0 +1,33 @@
+{
+  "nextId": 5,
+  "users": [
+    {
+      "id": 1,
+      "name": "Jane Doe",
+      "email": "jane.doe@acme.com",
+      "password": "$2b$10$3wAhx.L26Ghl64MF0/n0K.rOxmKz/ZPYZGzxMVdPDAWJVRUFiJFme",
+      "created_at": "2026-06-26T07:10:41.146Z"
+    },
+    {
+      "id": 2,
+      "name": "retave hitzcart",
+      "email": "retave4335@hitzcart.com",
+      "password": "$2b$10$EgUhRG2tBmeo5mYpWMxwAeN.nKFzGiK0HwuuHKrQJ0pK85D.6oKSu",
+      "created_at": "2026-06-26T07:10:41.146Z"
+    },
+    {
+      "id": 3,
+      "name": "Geethika",
+      "email": "pothageethika@gmail.com",
+      "password": "$2b$10$V0j16pf9f8jS4k8aP1ajieNdQ9bxjV3/FH3B3t87SEmj7Yld7m3qm",
+      "created_at": "2026-06-26T07:11:43.861Z"
+    },
+    {
+      "id": 4,
+      "name": "Google User",
+      "email": "google_user@example.com",
+      "password": "$2b$10$cM2J60IA.L6nY/NonoBJfeQMagMH39Qh4MyyZWcrBY9DFjKjx3cb.",
+      "created_at": "2026-06-26T09:17:09.880Z"
+    }
+  ]
+}

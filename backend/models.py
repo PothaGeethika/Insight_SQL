@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional, List, Any
 
 class DatabaseConnection(BaseModel):
     id: Optional[str] = None
@@ -48,3 +48,14 @@ class QueryRequest(BaseModel):
     connection_id: Optional[str] = None
     connection_ids: Optional[List[str]] = None
     database: Optional[str] = None # New field for easy switching
+
+class ExplainRequest(BaseModel):
+    query: str
+    connection_id: Optional[str] = None
+
+class OptimizeRequest(BaseModel):
+    query: str
+    explain_json: Any
+    connection_id: Optional[str] = None
+    provider: str = "gemini"
+    model: Optional[str] = None
