@@ -3,6 +3,7 @@ import json
 import urllib.parse
 import time
 from logger_config import get_logger
+from config import _require_env
 
 log = get_logger("elastic")
 
@@ -59,7 +60,9 @@ class ElasticsearchDatabaseManager:
                 if parsed.port == 443:
                     host_url = f"https://{host_netloc}"
                 else:
-                    host_url = f"http://{parsed.hostname or 'localhost'}:{parsed.port or 9200}"
+                    default_es_host = _require_env("ELASTICSEARCH_DEFAULT_HOST")
+                    default_es_port = _require_env("ELASTICSEARCH_DEFAULT_PORT")
+                    host_url = f"http://{parsed.hostname or default_es_host}:{parsed.port or int(default_es_port)}"
             else:
                 host_url = host_netloc
                 

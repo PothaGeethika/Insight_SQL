@@ -258,6 +258,24 @@
   50%  { background-position: 100% 50%; }
   100% { background-position: 0% 50%; }
 }
+@keyframes db-marquee-scroll {
+  0%   { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+.db-marquee-track {
+  animation: db-marquee-scroll 55s linear infinite;
+}
+.db-marquee-track:hover {
+  animation-play-state: paused;
+}
+@media (prefers-reduced-motion: reduce) {
+  .db-marquee-track {
+    animation: none;
+    flex-wrap: wrap;
+    width: 100%;
+    justify-content: center;
+  }
+}
 
 /* ═══════════════════════════════════════════════════════════
    GLOW EFFECTS

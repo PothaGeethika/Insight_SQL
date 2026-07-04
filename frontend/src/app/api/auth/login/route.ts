@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { findUserByEmail } from "@/lib/userDb";
 
-const JWT_SECRET = process.env.JWT_SECRET || "insightsql_jwt_secret_key_2025_secure";
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+  throw new Error("Missing required environment variable: JWT_SECRET");
+}
 
 async function signJwt(payload: object): Promise<string> {
   const jwt = (await import("jsonwebtoken")).default;

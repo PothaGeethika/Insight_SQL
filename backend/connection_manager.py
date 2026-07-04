@@ -5,6 +5,7 @@ import uuid
 from typing import List, Optional
 from models import DatabaseConnection
 from logger_config import get_logger
+from config import _require_env
 import urllib.parse
 
 log = get_logger("connection_manager")
@@ -23,7 +24,9 @@ def _decrypt_record(record: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 class ConnectionManager:
-    def __init__(self, storage_path="connections.json"):
+    def __init__(self, storage_path=None):
+        if storage_path is None:
+            storage_path = _require_env("CONNECTIONS_STORAGE_PATH")
         self.storage_path = storage_path
         log.info("[CONN_MGR] Initialising ConnectionManager – storage='%s'", storage_path)
         if not os.path.exists(self.storage_path):
@@ -172,7 +175,7 @@ class ConnectionManager:
                 url += "?" + "&".join(params)
         elif conn.type == "neo4j":
             scheme = "neo4j+s" if conn.host and "databases.neo4j.io" in conn.host else "neo4j"
-            host_part = conn.host or "localhost"
+            host_part = conn.host or _require_env("DB_DEFAULT_HOST")
             port_part = f":{conn.port}" if conn.port else ""
             if user and password:
                 url = f"{scheme}://{user}:{password}@{host_part}{port_part}"
@@ -180,7 +183,7 @@ class ConnectionManager:
                 url = f"{scheme}://{host_part}{port_part}"
         else:
             # Fallback for any other custom SQL databases
-            host_part = conn.host or "localhost"
+            host_part = conn.host or _require_env("DB_DEFAULT_HOST")
             port_part = f":{conn.port}" if conn.port else ""
             db_part = f"/{conn.database}" if conn.database else ""
             if user and password:

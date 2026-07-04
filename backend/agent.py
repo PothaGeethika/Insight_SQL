@@ -12,6 +12,22 @@ from langchain_core.output_parsers import StrOutputParser
 from dotenv import load_dotenv
 from logger_config import get_logger
 import json
+from config import (
+    DB_QUERY_MAX_RETRIES,
+    GEMINI_API_KEY,
+    GROQ_API_KEY,
+    GROQ_MODEL,
+    DEEPSEEK_API_KEY,
+    DEEPSEEK_MODEL,
+    DEEPSEEK_BASE_URL,
+    OLLAMA_BASE_URL,
+    OLLAMA_MODEL,
+    LLM_MODEL,
+    LLM_FALLBACK_PROVIDERS,
+    SYNTHESIS_ROW_LIMIT,
+    STREAM_TOKEN_TIMEOUT_SECONDS,
+    SYNTHESIS_FAILURE_MESSAGE,
+)
 
 load_dotenv()
 log = get_logger("agent")
@@ -135,8 +151,7 @@ class SQLAgent:
         
         Cypher Query:
         """)
-        self.parser = StrOutputParser()
-        
+
         self.synthesize_prompt = ChatPromptTemplate.from_template("""
         You are a helpful and expert data assistant. 
         Given the user's original question and the structured query results returned from the database, synthesize a clear, friendly, and complete natural language response.
@@ -163,60 +178,102 @@ class SQLAgent:
         
         Assistant Response:
         """)
+        self.parser = StrOutputParser()
+
+    def _has_provider_credentials(self, provider: str) -> bool:
+        if provider == "gemini":
+            return bool(GEMINI_API_KEY)
+        if provider == "groq":
+            return bool(GROQ_API_KEY) and not GROQ_API_KEY.startswith("ssh-")
+        if provider == "deepseek":
+            return bool(DEEPSEEK_API_KEY)
+        if provider == "ollama":
+            return bool(OLLAMA_BASE_URL)
+        return False
+
+    def _default_model_for_provider(self, provider: str) -> str:
+        model_map = {
+            "gemini": LLM_MODEL,
+            "groq": GROQ_MODEL,
+            "deepseek": DEEPSEEK_MODEL,
+            "ollama": OLLAMA_MODEL,
+        }
+        return model_map[provider]
+
+    def _provider_attempt_order(self, provider: str) -> list[str]:
+        order: list[str] = []
+        for candidate in [provider, *LLM_FALLBACK_PROVIDERS]:
+            if candidate not in order and self._has_provider_credentials(candidate):
+                order.append(candidate)
+        return order
+
+    def _invoke_chain_with_fallback(self, prompt_template, inputs, provider, model_name=None, temperature=0):
+        last_error = None
+        for attempt_provider in self._provider_attempt_order(provider):
+            attempt_model = model_name if attempt_provider == provider else self._default_model_for_provider(attempt_provider)
+            try:
+                llm = self.get_llm(attempt_provider, attempt_model, temperature)
+                chain = prompt_template | llm | self.parser
+                log.info("[LLM] Invoking provider='%s' model='%s'", attempt_provider, attempt_model)
+                return chain.invoke(inputs)
+            except Exception as exc:
+                log.warning("[LLM] Provider '%s' failed: %s", attempt_provider, exc)
+                last_error = exc
+        if last_error:
+            raise last_error
+        raise RuntimeError("No configured LLM providers are available.")
 
     def get_llm(self, provider, model_name=None, temperature=0):
         log.debug("[LLM] Selecting provider='%s' model='%s' temp=%s", provider, model_name, temperature)
         if provider not in ["gemini", "groq", "deepseek", "ollama"]:
-            log.warning("[LLM] Provider '%s' unsupported. Falling back to gemini or groq.", provider)
-            if os.getenv("GROQ_API_KEY") and not os.getenv("GROQ_API_KEY").startswith("ssh-"):
-                provider = "groq"
-                model_name = "llama-3.1-70b-versatile"
-            else:
-                provider = "gemini"
-                model_name = "gemini-2.0-flash"
+            log.warning("[LLM] Provider '%s' unsupported. Using configured fallback providers.", provider)
+            available = self._provider_attempt_order(provider)
+            if not available:
+                raise RuntimeError(f"Unsupported provider '{provider}' and no fallback providers are configured.")
+            provider = available[0]
+            model_name = self._default_model_for_provider(provider)
+
+        resolved_model = model_name or self._default_model_for_provider(provider)
 
         if provider == "gemini":
-            api_key = os.getenv("GEMINI_API_KEY")
-            if not api_key:
-                log.error("[LLM] GEMINI_API_KEY is not set in environment!")
-            log.info("[LLM] Using Google Gemini – model=%s", model_name or "gemini-2.0-flash")
+            if not GEMINI_API_KEY:
+                raise RuntimeError("GEMINI_API_KEY is not set in environment.")
+            log.info("[LLM] Using Google Gemini – model=%s", resolved_model)
             return ChatGoogleGenerativeAI(
-                model=model_name or "gemini-2.0-flash",
-                google_api_key=api_key,
+                model=resolved_model,
+                google_api_key=GEMINI_API_KEY,
                 temperature=temperature,
-                max_retries=0
+                max_retries=0,
             )
-        elif provider == "groq":
-            api_key = os.getenv("GROQ_API_KEY")
-            if not api_key:
-                log.error("[LLM] GROQ_API_KEY is not set in environment!")
-            log.info("[LLM] Using Groq – model=%s", model_name or "llama-3.1-70b-versatile")
+        if provider == "groq":
+            if not GROQ_API_KEY:
+                raise RuntimeError("GROQ_API_KEY is not set in environment.")
+            log.info("[LLM] Using Groq – model=%s", resolved_model)
             return ChatGroq(
-                model=model_name or "llama-3.1-70b-versatile",
-                groq_api_key=api_key,
+                model=resolved_model,
+                groq_api_key=GROQ_API_KEY,
                 temperature=temperature,
-                max_retries=0
+                max_retries=0,
             )
-        elif provider == "deepseek":
-            api_key = os.getenv("DEEPSEEK_API_KEY")
-            if not api_key:
-                log.error("[LLM] DEEPSEEK_API_KEY is not set in environment!")
-            log.info("[LLM] Using DeepSeek – model=%s", model_name or "deepseek-chat")
+        if provider == "deepseek":
+            if not DEEPSEEK_API_KEY:
+                raise RuntimeError("DEEPSEEK_API_KEY is not set in environment.")
+            log.info("[LLM] Using DeepSeek – model=%s", resolved_model)
             return ChatOpenAI(
-                model=model_name or "deepseek-chat",
-                api_key=api_key,
-                base_url="https://api.deepseek.com/v1",
+                model=resolved_model,
+                api_key=DEEPSEEK_API_KEY,
+                base_url=DEEPSEEK_BASE_URL,
                 temperature=temperature,
-                max_retries=0
+                max_retries=0,
             )
-        elif provider == "ollama":
-            base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-            log.info("[LLM] Using Ollama locally – model=%s  base_url=%s", model_name or "llama3", base_url)
+        if provider == "ollama":
+            log.info("[LLM] Using Ollama locally – model=%s  base_url=%s", resolved_model, OLLAMA_BASE_URL)
             return ChatOllama(
-                model=model_name or "llama3",
-                base_url=base_url,
-                temperature=temperature
+                model=resolved_model,
+                base_url=OLLAMA_BASE_URL,
+                temperature=temperature,
             )
+        raise RuntimeError(f"Unsupported provider '{provider}'.")
 
     def generate_query(self, question, schema, db_type="postgresql", provider="gemini", model_name=None):
         """Generates either a SQL query or MQL JSON based on the database type."""
@@ -224,8 +281,6 @@ class SQLAgent:
         log.info("[QUERY_GEN] db_type='%s'  provider='%s'  model='%s'", db_type, provider, model_name)
         log.info("[QUERY_GEN] User question: %s", question)
         log.debug("[QUERY_GEN] Schema passed to LLM (first 500 chars):\n%s", schema[:500])
-
-        llm = self.get_llm(provider, model_name, temperature=0)
 
         prompt_map = {
             "mongodb":       self.mql_prompt,
@@ -236,10 +291,15 @@ class SQLAgent:
         }
         prompt = prompt_map.get(db_type, self.sql_prompt)
         log.debug("[QUERY_GEN] Using prompt template for db_type='%s'", db_type)
-        chain = prompt | llm | self.parser
 
         t0 = time.perf_counter()
-        result = chain.invoke({"question": question, "schema": schema})
+        result = self._invoke_chain_with_fallback(
+            prompt,
+            {"question": question, "schema": schema},
+            provider,
+            model_name,
+            temperature=0,
+        )
         elapsed = time.perf_counter() - t0
 
         # Clean up any potential markdown formatting
@@ -251,7 +311,6 @@ class SQLAgent:
     def fix_query(self, question, schema, wrong_query, error_message, db_type="postgresql", provider="gemini", model_name=None):
         """Self-healing loop: asks the LLM to fix a query that failed to execute."""
         log.info("[QUERY_FIX] ── Attempting to self-heal query ──────────────────")
-        llm = self.get_llm(provider, model_name, temperature=0)
 
         fix_prompt = ChatPromptTemplate.from_template("""
         You are a data analyst assistant. You previously generated a query that resulted in an execution error.
@@ -274,15 +333,20 @@ class SQLAgent:
         Provide ONLY the corrected raw query (SQL or MQL JSON) without any markdown formatting or explanations.
         """)
 
-        chain = fix_prompt | llm | self.parser
         t0 = time.perf_counter()
-        result = chain.invoke({
-            "db_type": db_type,
-            "schema": schema,
-            "question": question,
-            "wrong_query": wrong_query,
-            "error_message": str(error_message)
-        })
+        result = self._invoke_chain_with_fallback(
+            fix_prompt,
+            {
+                "db_type": db_type,
+                "schema": schema,
+                "question": question,
+                "wrong_query": wrong_query,
+                "error_message": str(error_message),
+            },
+            provider,
+            model_name,
+            temperature=0,
+        )
         elapsed = time.perf_counter() - t0
 
         cleaned = result.strip().replace("```sql", "").replace("```json", "").replace("```", "").strip()
@@ -309,27 +373,24 @@ class SQLAgent:
         
         Output:
         """)
-        llm = self.get_llm(provider, model_name, temperature=0.7)
-        chain = prompt | llm | self.parser
 
         t0 = time.perf_counter()
-        response = None
         try:
-            response = chain.invoke({"history_text": history_text, "schema": schema})
-        except Exception as first_err:
-            log.warning("[SUGGESTIONS] Primary provider '%s' failed: %s. Falling back to Gemini...", provider, first_err)
-            try:
-                fallback_llm = self.get_llm("gemini", temperature=0.7)
-                fallback_chain = prompt | fallback_llm | self.parser
-                response = fallback_chain.invoke({"history_text": history_text, "schema": schema})
-            except Exception as second_err:
-                log.error("[SUGGESTIONS] Fallback Gemini also failed: %s", second_err)
-                return [
-                    "Show database tables list",
-                    "Count total records in main table",
-                    "Preview first 10 rows of active table",
-                    "Explain the database schema"
-                ]
+            response = self._invoke_chain_with_fallback(
+                prompt,
+                {"history_text": history_text, "schema": schema},
+                provider,
+                model_name,
+                temperature=0.7,
+            )
+        except Exception as err:
+            log.error("[SUGGESTIONS] All providers failed: %s", err)
+            return [
+                "Show database tables list",
+                "Count total records in main table",
+                "Preview first 10 rows of active table",
+                "Explain the database schema"
+            ]
 
         elapsed = time.perf_counter() - t0
         log.debug("[SUGGESTIONS] LLM responded in %.2fs", elapsed)
@@ -376,22 +437,19 @@ class SQLAgent:
         
         Output:
         """)
-        llm = self.get_llm(provider, model_name, temperature=0.7)
-        chain = prompt | llm | self.parser
 
         t0 = time.perf_counter()
-        response = None
         try:
-            response = chain.invoke({"schema": schema})
-        except Exception as first_err:
-            log.warning("[DASHBOARD] Primary provider '%s' failed: %s. Falling back to Gemini...", provider, first_err)
-            try:
-                fallback_llm = self.get_llm("gemini", temperature=0.7)
-                fallback_chain = prompt | fallback_llm | self.parser
-                response = fallback_chain.invoke({"schema": schema})
-            except Exception as second_err:
-                log.error("[DASHBOARD] Fallback Gemini also failed: %s", second_err)
-                return []
+            response = self._invoke_chain_with_fallback(
+                prompt,
+                {"schema": schema},
+                provider,
+                model_name,
+                temperature=0.7,
+            )
+        except Exception as err:
+            log.error("[DASHBOARD] All providers failed: %s", err)
+            return []
 
         elapsed = time.perf_counter() - t0
         log.debug("[DASHBOARD] LLM responded in %.2fs", elapsed)
@@ -422,22 +480,18 @@ class SQLAgent:
         3. Do not use quotes.
         4. Focus on the core subject of the data inquiry.
         """)
-        llm = self.get_llm(provider, model_name)
-        chain = prompt | llm | self.parser
 
         t0 = time.perf_counter()
-        title = None
         try:
-            title = chain.invoke({"question": question, "response": response_text})
-        except Exception as first_err:
-            log.warning("[SUMMARIZE] Primary provider '%s' failed: %s. Falling back to Gemini...", provider, first_err)
-            try:
-                fallback_llm = self.get_llm("gemini")
-                fallback_chain = prompt | fallback_llm | self.parser
-                title = fallback_chain.invoke({"question": question, "response": response_text})
-            except Exception as second_err:
-                log.error("[SUMMARIZE] Fallback Gemini also failed: %s", second_err)
-                return "Data Query Summary"
+            title = self._invoke_chain_with_fallback(
+                prompt,
+                {"question": question, "response": response_text},
+                provider,
+                model_name,
+            )
+        except Exception as err:
+            log.error("[SUMMARIZE] All providers failed: %s", err)
+            return "Data Query Summary"
 
         elapsed = time.perf_counter() - t0
         title = title.strip().strip('"').strip("'")
@@ -463,75 +517,62 @@ class SQLAgent:
                 await self.queue.put(None)
 
         handler = _TokenQueue()
+        truncated_rows = rows[:SYNTHESIS_ROW_LIMIT]
+        payload = {
+            "question": question,
+            "headers": json.dumps(headers),
+            "rows": json.dumps(truncated_rows),
+        }
 
-        try:
-            llm = self.get_llm(provider, model_name, temperature=0)
-            # Enable streaming on the LLM
-            llm.streaming = True
-            chain = self.synthesize_prompt | llm | self.parser
-
-            truncated_rows = rows[:30]
-            # Run the chain in background so we can yield tokens from the queue
-            asyncio.ensure_future(
-                chain.ainvoke(
-                    {
-                        "question": question,
-                        "headers": json.dumps(headers),
-                        "rows": json.dumps(truncated_rows),
-                    },
-                    config={"callbacks": [handler]},
+        for attempt_provider in self._provider_attempt_order(provider):
+            attempt_model = model_name if attempt_provider == provider else self._default_model_for_provider(attempt_provider)
+            try:
+                llm = self.get_llm(attempt_provider, attempt_model, temperature=0)
+                llm.streaming = True
+                chain = self.synthesize_prompt | llm | self.parser
+                asyncio.ensure_future(
+                    chain.ainvoke(payload, config={"callbacks": [handler]})
                 )
-            )
 
-            while True:
-                token = await asyncio.wait_for(handler.queue.get(), timeout=30)
-                if token is None:
-                    break
-                yield token
-        except Exception as e:
-            log.error("[SYNTHESIZE_STREAM] Error: %s", e, exc_info=True)
-            yield f"Error generating response: {str(e)}"
+                while True:
+                    token = await asyncio.wait_for(handler.queue.get(), timeout=STREAM_TOKEN_TIMEOUT_SECONDS)
+                    if token is None:
+                        return
+                    yield token
+            except Exception as exc:
+                log.warning("[SYNTHESIZE_STREAM] Provider '%s' failed: %s", attempt_provider, exc)
+                handler = _TokenQueue()
+
+        fallback_text = self.synthesize_answer(question, headers, rows, provider, model_name)
+        yield fallback_text
 
     def synthesize_answer(self, question, headers, rows, provider="gemini", model_name=None):
         """Synthesizes a natural language answer based on query results."""
         log.info("[SYNTHESIZE] Building natural language answer – provider='%s'", provider)
         log.info("[SYNTHESIZE] Result set: %d rows × %d columns", len(rows), len(headers))
         
-        # Truncate row count to save tokens – keep first 30 rows for synthesis
-        truncated_rows = rows[:30]
-        if len(rows) > 30:
-            log.warning("[SYNTHESIZE] Result has %d rows – truncating to 35 for LLM synthesis", len(rows))
+        truncated_rows = rows[:SYNTHESIS_ROW_LIMIT]
+        if len(rows) > SYNTHESIS_ROW_LIMIT:
+            log.warning("[SYNTHESIZE] Result has %d rows – truncating to %d for LLM synthesis", len(rows), SYNTHESIS_ROW_LIMIT)
 
         try:
-            llm = self.get_llm(provider, model_name)
-            chain = self.synthesize_prompt | llm | self.parser
-
             t0 = time.perf_counter()
-            response = chain.invoke({
-                "question": question,
-                "headers": json.dumps(headers),
-                "rows": json.dumps(truncated_rows)
-            })
+            response = self._invoke_chain_with_fallback(
+                self.synthesize_prompt,
+                {
+                    "question": question,
+                    "headers": json.dumps(headers),
+                    "rows": json.dumps(truncated_rows),
+                },
+                provider,
+                model_name,
+            )
             elapsed = time.perf_counter() - t0
             log.info("[SYNTHESIZE] Answer synthesized in %.2fs (%d chars)", elapsed, len(response))
             return response.strip()
-        except Exception as e:
-            log.warning("[SYNTHESIZE] Primary provider '%s' failed: %s. Falling back to Gemini...", provider, e)
-            try:
-                fallback_llm = self.get_llm("gemini")
-                fallback_chain = self.synthesize_prompt | fallback_llm | self.parser
-                t0 = time.perf_counter()
-                response = fallback_chain.invoke({
-                    "question": question,
-                    "headers": json.dumps(headers),
-                    "rows": json.dumps(truncated_rows)
-                })
-                elapsed = time.perf_counter() - t0
-                log.info("[SYNTHESIZE] Answer synthesized with Gemini in %.2fs", elapsed)
-                return response.strip()
-            except Exception as second_err:
-                log.error("[SYNTHESIZE] Fallback Gemini also failed: %s", second_err, exc_info=True)
-                return f"Failed to synthesize explanation due to API limitations. Query succeeded with {len(rows)} row(s)."
+        except Exception as err:
+            log.error("[SYNTHESIZE] All providers failed: %s", err, exc_info=True)
+            return SYNTHESIS_FAILURE_MESSAGE.format(row_count=len(rows))
 
     def optimize_query(self, query, explain_json, schema, provider="gemini", model_name=None):
         """Analyzes a slow query and its execution plan, and suggests optimizations."""
@@ -558,15 +599,18 @@ class SQLAgent:
         Output ONLY the JSON object. Do not include markdown formatting like ```json.
         """)
         
-        llm = self.get_llm(provider, model_name, temperature=0)
-        chain = optimize_prompt | llm | self.parser
-        
         t0 = time.perf_counter()
-        result = chain.invoke({
-            "query": query,
-            "explain_json": json.dumps(explain_json),
-            "schema": schema
-        })
+        result = self._invoke_chain_with_fallback(
+            optimize_prompt,
+            {
+                "query": query,
+                "explain_json": json.dumps(explain_json),
+                "schema": schema,
+            },
+            provider,
+            model_name,
+            temperature=0,
+        )
         elapsed = time.perf_counter() - t0
         
         cleaned = result.strip().replace("```json", "").replace("```", "").strip()

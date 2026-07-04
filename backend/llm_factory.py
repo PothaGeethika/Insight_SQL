@@ -23,13 +23,13 @@ def get_llm(provider=None):
         log.debug("[LLM_FACTORY] Using ChatOpenAI (DeepSeek API) with model='%s'", model_name)
         return ChatOpenAI(
             model=model_name,
-            api_key=DEEPSEEK_API_KEY or os.getenv("DEEPSEEK_API_KEY", ""),
-            base_url="https://api.deepseek.com/v1"
+            api_key=DEEPSEEK_API_KEY or os.getenv("DEEPSEEK_API_KEY"),
+            base_url=os.getenv("DEEPSEEK_BASE_URL")
         )
     elif selected_provider == "groq":
         log.debug("[LLM_FACTORY] Using ChatGroq with model='%s'", GROQ_MODEL)
         return ChatGroq(
-            api_key=GROQ_API_KEY or os.getenv("GROQ_API_KEY", ""),
+            api_key=GROQ_API_KEY or os.getenv("GROQ_API_KEY"),
             model=GROQ_MODEL
         )
     elif selected_provider == "ollama":
@@ -43,5 +43,5 @@ def get_llm(provider=None):
         log.debug("[LLM_FACTORY] Using ChatGoogleGenerativeAI with model='%s'", LLM_MODEL)
         return ChatGoogleGenerativeAI(
             model=LLM_MODEL,
-            google_api_key=GEMINI_API_KEY or os.getenv("GEMINI_API_KEY", "")
+            google_api_key=GEMINI_API_KEY or os.getenv("GEMINI_API_KEY")
         )

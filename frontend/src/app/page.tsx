@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import Link from "next/link";
 import { useState, useEffect, useRef } from "react";
+import { DatabaseLogoMarquee } from "@/components/DatabaseLogoMarquee";
 
 // ─── Animation variants ────────────────────────────────────────────────────
 
@@ -35,16 +36,7 @@ const NAV_LINKS = [
   { label: "Features", href: "#features" },
   { label: "How it works", href: "#how" },
   { label: "Pricing", href: "#pricing" },
-  { label: "Docs", href: "#" },
-];
-
-const DATABASES = [
-  { name: "PostgreSQL", color: "#336791", emoji: "🐘" },
-  { name: "MySQL", color: "#00758f", emoji: "🐬" },
-  { name: "MongoDB", color: "#13aa52", emoji: "🍃" },
-  { name: "Snowflake", color: "#29b5e8", emoji: "❄️" },
-  { name: "Elasticsearch", color: "#f04e98", emoji: "🔍" },
-  { name: "Neo4j", color: "#008cc1", emoji: "🔗" },
+  { label: "Docs", href: "/docs" },
 ];
 
 const FEATURES = [
@@ -352,15 +344,17 @@ export default function LandingPage() {
 
           {/* Desktop nav */}
           <div className="hidden md:flex items-center gap-8">
-            {NAV_LINKS.map((l) => (
-              <a
-                key={l.label}
-                href={l.href}
-                className="text-sm text-slate-400 hover:text-white transition-colors"
-              >
-                {l.label}
-              </a>
-            ))}
+            {NAV_LINKS.map((l) =>
+              l.href.startsWith("/") && !l.href.startsWith("/#") ? (
+                <Link key={l.label} href={l.href} className="text-sm text-slate-400 hover:text-white transition-colors">
+                  {l.label}
+                </Link>
+              ) : (
+                <a key={l.label} href={l.href} className="text-sm text-slate-400 hover:text-white transition-colors">
+                  {l.label}
+                </a>
+              )
+            )}
           </div>
 
           {/* CTA */}
@@ -397,11 +391,17 @@ export default function LandingPage() {
               className="md:hidden border-t border-white/5 bg-[#0c0c14]"
             >
               <div className="px-6 py-4 space-y-3">
-                {NAV_LINKS.map((l) => (
-                  <a key={l.label} href={l.href} className="block text-sm text-slate-400 hover:text-white py-1" onClick={() => setMobileOpen(false)}>
-                    {l.label}
-                  </a>
-                ))}
+                {NAV_LINKS.map((l) =>
+                  l.href.startsWith("/") && !l.href.startsWith("/#") ? (
+                    <Link key={l.label} href={l.href} className="block text-sm text-slate-400 hover:text-white py-1" onClick={() => setMobileOpen(false)}>
+                      {l.label}
+                    </Link>
+                  ) : (
+                    <a key={l.label} href={l.href} className="block text-sm text-slate-400 hover:text-white py-1" onClick={() => setMobileOpen(false)}>
+                      {l.label}
+                    </a>
+                  )
+                )}
                 <div className="pt-3 border-t border-white/5 flex flex-col gap-2">
                   <Link href="/login"><Button variant="outline" className="w-full border-white/10 text-slate-300">Log in</Button></Link>
                   <Link href="/signup"><Button className="w-full bg-indigo-600 hover:bg-indigo-500">Get started free</Button></Link>
@@ -533,29 +533,7 @@ export default function LandingPage() {
         </motion.div>
       </section>
 
-      {/* ── Database logos ───────────────────────────────────────────────── */}
-      <section className="py-16 border-y border-white/5">
-        <div className="max-w-7xl mx-auto px-6">
-          <p className="text-center text-sm font-medium text-slate-500 uppercase tracking-widest mb-10">
-            Works with every database you already use
-          </p>
-          <div className="flex flex-wrap items-center justify-center gap-6 md:gap-10">
-            {DATABASES.map((db, i) => (
-              <motion.div
-                key={db.name}
-                initial={{ opacity: 0, y: 10 }}
-                whileInView={{ opacity: 1, y: 0 }}
-                viewport={{ once: true }}
-                transition={{ delay: i * 0.07 }}
-                className="flex items-center gap-2.5 px-4 py-2.5 rounded-xl border border-white/5 bg-white/[0.02] hover:bg-white/[0.05] hover:border-white/10 transition-all cursor-default group"
-              >
-                <span className="text-xl">{db.emoji}</span>
-                <span className="text-sm font-semibold text-slate-400 group-hover:text-slate-200 transition-colors">{db.name}</span>
-              </motion.div>
-            ))}
-          </div>
-        </div>
-      </section>
+      <DatabaseLogoMarquee />
 
       {/* ── Features ────────────────────────────────────────────────────── */}
       <section id="features" className="py-32">

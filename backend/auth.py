@@ -5,14 +5,13 @@ The frontend signs JWTs using the same JWT_SECRET used in the Next.js API routes
 The backend verifies these tokens to protect every endpoint.
 """
 
-import os
 from fastapi import Depends, HTTPException, Request, status
 from jose import JWTError, jwt
 from logger_config import get_logger
+from config import JWT_SECRET
 
 log = get_logger("auth")
 
-JWT_SECRET = os.getenv("JWT_SECRET", "insightsql_jwt_secret_key_2025_secure")
 JWT_ALGORITHM = "HS256"
 
 

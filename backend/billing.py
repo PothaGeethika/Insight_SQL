@@ -11,7 +11,7 @@ Required env vars:
   STRIPE_WEBHOOK_SECRET
   STRIPE_PRICE_PRO
   STRIPE_PRICE_ENTERPRISE   (optional)
-  FRONTEND_URL              (e.g. http://localhost:3000)
+  FRONTEND_URL              (e.g. http://127.0.0.1:3000)
 """
 
 import os
@@ -19,10 +19,11 @@ import json
 import sqlite3
 from contextlib import contextmanager
 from logger_config import get_logger
+from config import _require_env
 
 log = get_logger("billing")
 
-_DB_PATH = os.getenv("USER_DATA_DB", "user_data.db")
+_DB_PATH = _require_env("USER_DATA_DB")
 
 
 @contextmanager
@@ -92,16 +93,16 @@ def upsert_subscription(user_id: str, data: dict):
 
 def _stripe():
     import stripe as _s
-    _s.api_key = os.getenv("STRIPE_SECRET_KEY", "")
+    _s.api_key = _require_env("STRIPE_SECRET_KEY")
     return _s
 
 
 PLAN_PRICE_MAP = {
-    "pro": os.getenv("STRIPE_PRICE_PRO", ""),
-    "enterprise": os.getenv("STRIPE_PRICE_ENTERPRISE", ""),
+    "pro": _require_env("STRIPE_PRICE_PRO"),
+    "enterprise": _require_env("STRIPE_PRICE_ENTERPRISE"),
 }
 
-FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
+FRONTEND_URL = _require_env("FRONTEND_URL")
 
 
 def create_checkout_session(user_id: str, user_email: str, plan: str) -> str:
@@ -155,12 +156,8 @@ def create_portal_session(user_id: str) -> str:
 def handle_webhook(payload: bytes, sig_header: str) -> dict:
     """Verifies and processes a Stripe webhook event."""
     stripe = _stripe()
-    webhook_secret = os.getenv("STRIPE_WEBHOOK_SECRET", "")
-    if not webhook_secret:
-        log.warning("[BILLING] STRIPE_WEBHOOK_SECRET not set — skipping signature verification.")
-        event = json.loads(payload)
-    else:
-        event = stripe.Webhook.construct_event(payload, sig_header, webhook_secret)
+    webhook_secret = _require_env("STRIPE_WEBHOOK_SECRET")
+    event = stripe.Webhook.construct_event(payload, sig_header, webhook_secret)
 
     etype = event["type"]
     log.info("[BILLING] Webhook event: %s", etype)

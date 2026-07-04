@@ -474,7 +474,7 @@ export default function DatabasesPage() {
         payload.schema_name = schemaName;
         payload.role = role;
       } else {
-        payload.host = host || "localhost";
+        payload.host = host;
         payload.port = port ? parseInt(port) : getDefaultPort(dbType);
         if (dbType === 'elasticsearch') {
           payload.api_key = apiKey;
@@ -895,7 +895,7 @@ export default function DatabasesPage() {
                             <Input
                               value={host}
                               onChange={(e) => setHost(e.target.value)}
-                              placeholder="e.g., localhost or my-es-project.es.asia-south1.gcp.elastic.cloud"
+                              placeholder="e.g., db.example.com or my-es-project.es.asia-south1.gcp.elastic.cloud"
                               className="bg-[var(--surface-0)] border-slate-800 focus:border-indigo-500 h-11 rounded-xl text-sm text-white"
                             />
                           </div>
@@ -1029,7 +1029,7 @@ export default function DatabasesPage() {
                             <Input
                               value={host}
                               onChange={(e) => setHost(e.target.value)}
-                              placeholder="localhost"
+                              placeholder="db.example.com"
                               className="bg-[var(--surface-0)] border-slate-800 focus:border-indigo-500 h-11 rounded-xl text-sm text-white"
                             />
                           </div>

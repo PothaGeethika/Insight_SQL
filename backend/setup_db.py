@@ -2,6 +2,7 @@ import psycopg2
 from dotenv import load_dotenv
 import os
 from logger_config import get_logger
+from config import _require_env
 
 log = get_logger("setup_db")
 
@@ -19,7 +20,7 @@ def setup_database():
         conn.autocommit = True
         cursor = conn.cursor()
         
-        db_name = os.getenv("DB_NAME", "insightsql_db")
+        db_name = _require_env("DB_NAME")
         
         # Check if database exists
         cursor.execute(f"SELECT 1 FROM pg_catalog.pg_database WHERE datname = '{db_name}'")

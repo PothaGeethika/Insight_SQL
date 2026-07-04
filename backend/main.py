@@ -18,6 +18,21 @@ from agent import SQLAgent
 from connection_manager import ConnectionManager
 from logger_config import get_logger
 from auth import get_current_user
+from config import (
+    ALLOWED_ORIGINS,
+    ASK_RATE_LIMIT,
+    DASHBOARD_RATE_LIMIT,
+    DB_QUERY_MAX_RETRIES,
+    EXPLAIN_RATE_LIMIT,
+    OPTIMIZE_RATE_LIMIT,
+    SUGGEST_ASSISTANT_MAX_CHARS,
+    SUGGEST_HISTORY_LIMIT,
+    SUGGEST_RATE_LIMIT,
+    LLM_PROVIDER,
+    LLM_MODEL,
+    UVICORN_HOST,
+    UVICORN_PORT,
+)
 import user_data as ud
 import billing
 import teams as tm
@@ -40,13 +55,11 @@ log.info("[STARTUP] InsightSQL FastAPI application initialising...")
 # ---------------------------------------------------------------------------
 # CORS – restrict to frontend origin via env var
 # ---------------------------------------------------------------------------
-_raw_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000")
-allowed_origins = [o.strip() for o in _raw_origins.split(",") if o.strip()]
-log.info("[STARTUP] CORS allowed_origins: %s", allowed_origins)
+log.info("[STARTUP] CORS allowed_origins: %s", ALLOWED_ORIGINS)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins,
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -310,12 +323,12 @@ class SuggestionRequest(BaseModel):
     history: List[dict] = []
     connection_id: Optional[str] = None
     database: Optional[str] = None
-    provider: str = "gemini"
-    model: str = "gemini-2.0-flash"
+    provider: str = LLM_PROVIDER
+    model: str = LLM_MODEL
 
 
 @app.post("/ask")
-@limiter.limit(os.getenv("ASK_RATE_LIMIT", "30/minute"))
+@limiter.limit(ASK_RATE_LIMIT)
 def ask_question(
     request: Request,
     payload: QueryRequest,
@@ -367,7 +380,7 @@ def ask_question(
                 if not generated_query.strip() or "NOT_APPLICABLE" in generated_query:
                     continue
 
-                max_retries = 2
+                max_retries = DB_QUERY_MAX_RETRIES
                 attempt = 0
                 while attempt <= max_retries:
                     try:
@@ -487,7 +500,7 @@ def ask_question(
 
 
 @app.post("/ask/stream")
-@limiter.limit(os.getenv("ASK_RATE_LIMIT", "30/minute"))
+@limiter.limit(ASK_RATE_LIMIT)
 async def ask_question_stream(
     request: Request,
     payload: QueryRequest,
@@ -536,7 +549,7 @@ async def ask_question_stream(
                     if not generated_query.strip() or "NOT_APPLICABLE" in generated_query:
                         continue
 
-                    max_retries = 2
+                    max_retries = DB_QUERY_MAX_RETRIES
                     attempt = 0
                     while attempt <= max_retries:
                         try:
@@ -637,7 +650,7 @@ async def ask_question_stream(
 
 
 @app.post("/dashboard-generate")
-@limiter.limit(os.getenv("DASHBOARD_RATE_LIMIT", "10/minute"))
+@limiter.limit(DASHBOARD_RATE_LIMIT)
 def generate_dashboard(
     request: Request,
     payload: QueryRequest,
@@ -691,7 +704,7 @@ def generate_dashboard(
 
 
 @app.post("/explain")
-@limiter.limit("10/minute")
+@limiter.limit(EXPLAIN_RATE_LIMIT)
 def explain_query_api(
     request: Request,
     payload: ExplainRequest,
@@ -718,7 +731,7 @@ def explain_query_api(
 
 
 @app.post("/optimize")
-@limiter.limit("10/minute")
+@limiter.limit(OPTIMIZE_RATE_LIMIT)
 def optimize_query_api(
     request: Request,
     payload: OptimizeRequest,
@@ -749,7 +762,7 @@ def optimize_query_api(
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/suggest")
-@limiter.limit(os.getenv("SUGGEST_RATE_LIMIT", "60/minute"))
+@limiter.limit(SUGGEST_RATE_LIMIT)
 def suggest_questions(
     request: Request,
     payload: SuggestionRequest,
@@ -774,11 +787,11 @@ def suggest_questions(
     try:
         schema = current_db_manager.get_schema()
         history_text = ""
-        for msg in request.history[-6:]:
+        for msg in request.history[-SUGGEST_HISTORY_LIMIT:]:
             role = "User" if msg.get("role") == "user" else "Assistant"
             content = msg.get("content", "").strip()
-            if role == "Assistant" and len(content) > 300:
-                content = content[:300] + "..."
+            if role == "Assistant" and len(content) > SUGGEST_ASSISTANT_MAX_CHARS:
+                content = content[:SUGGEST_ASSISTANT_MAX_CHARS] + "..."
             if content:
                 history_text += f"{role}: {content}\n"
 
@@ -801,8 +814,8 @@ def summarize_chat(
 ):
     question = request.get("question")
     response_text = request.get("response")
-    provider = request.get("provider", "gemini")
-    model = request.get("model", "gemini-2.0-flash")
+    provider = request.get("provider", LLM_PROVIDER)
+    model = request.get("model", LLM_MODEL)
 
     if not question or not response_text or not sql_agent:
         return {"title": "New Chat"}
@@ -1116,4 +1129,4 @@ def health_check():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("main:app", host=UVICORN_HOST, port=UVICORN_PORT, reload=True)

@@ -22,9 +22,10 @@ from contextlib import contextmanager
 from typing import Optional
 
 from logger_config import get_logger
+from config import _require_env
 
 log = get_logger("teams")
-_DB_PATH = os.getenv("USER_DATA_DB", "user_data.db")
+_DB_PATH = _require_env("USER_DATA_DB")
 
 
 @contextmanager
@@ -228,7 +229,8 @@ def create_invite(org_id: str, email: str, role: str, invited_by: str) -> dict:
     # Send email
     try:
         from email.mime.multipart import MIMEMultipart
-        invite_link = f"http://localhost:3000/invite?token={token}"
+        app_base_url = _require_env("FRONTEND_URL")
+        invite_link = f"{app_base_url}/invite?token={token}"
         
         html_body = f"""
         <html>
@@ -271,39 +273,27 @@ def create_invite(org_id: str, email: str, role: str, invited_by: str) -> dict:
         </html>
         """
 
-        smtp_user = os.getenv("SMTP_EMAIL")
-        smtp_pass = os.getenv("SMTP_PASSWORD")
+        smtp_user = _require_env("SMTP_EMAIL")
+        smtp_pass = _require_env("SMTP_PASSWORD")
+        smtp_host = _require_env("SMTP_HOST")
+        smtp_port = int(_require_env("SMTP_PORT"))
 
-        if smtp_user and smtp_pass:
-            msg = MIMEMultipart("alternative")
-            msg["Subject"] = "You've been invited to InsightSQL"
-            msg["From"] = smtp_user
-            msg["To"] = email
-            # Plain-text fallback
-            plain = MIMEText(
-                f"You have been invited to InsightSQL as a {role}.\n\nAccept here: {invite_link}\n\nThis link expires in 48 hours.",
-                "plain"
-            )
-            html = MIMEText(html_body, "html")
-            msg.attach(plain)
-            msg.attach(html)
-            with smtplib.SMTP("smtp.gmail.com", 587) as server:
-                server.starttls()
-                server.login(smtp_user, smtp_pass)
-                server.send_message(msg)
-            log.info(f"[TEAMS] Email sent successfully via Gmail to {email}")
-        else:
-            # Fallback for local debugging without credentials
-            plain_msg = MIMEText(
-                f"You have been invited to InsightSQL as a {role}.\n\nAccept here: {invite_link}",
-                "plain"
-            )
-            plain_msg["From"] = "noreply@insightsql.local"
-            plain_msg["To"] = email
-            plain_msg["Subject"] = "InsightSQL Workspace Invitation"
-            with smtplib.SMTP("localhost", 1025) as server:
-                server.send_message(plain_msg)
-            log.info(f"[TEAMS] Email sent successfully via local mock to {email}")
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = "You've been invited to InsightSQL"
+        msg["From"] = smtp_user
+        msg["To"] = email
+        plain = MIMEText(
+            f"You have been invited to InsightSQL as a {role}.\n\nAccept here: {invite_link}\n\nThis link expires in 48 hours.",
+            "plain"
+        )
+        html = MIMEText(html_body, "html")
+        msg.attach(plain)
+        msg.attach(html)
+        with smtplib.SMTP(smtp_host, smtp_port) as server:
+            server.starttls()
+            server.login(smtp_user, smtp_pass)
+            server.send_message(msg)
+        log.info(f"[TEAMS] Email sent successfully to {email}")
     except Exception as e:
         log.warning(f"[TEAMS] Could not send email: {e}")
 

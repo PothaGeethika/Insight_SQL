@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="640" viewBox="0 0 1200 640" fill="none">
+  <rect width="1200" height="640" fill="#0a0a12"/>
+  <rect x="40" y="40" width="1120" height="560" rx="24" stroke="#6366f1" stroke-opacity="0.3" fill="#111118"/>
+  <text x="600" y="80" text-anchor="middle" fill="#94a3b8" font-family="system-ui,sans-serif" font-size="14" font-weight="600">DASHBOARD</text>
+  <rect x="80" y="120" width="260" height="120" rx="16" fill="#1e1e2e" stroke="#22c55e" stroke-opacity="0.5"/>
+  <text x="110" y="160" fill="#64748b" font-size="12">Revenue</text>
+  <text x="110" y="200" fill="#fff" font-size="28" font-weight="bold">$1.24M</text>
+  <rect x="380" y="120" width="260" height="120" rx="16" fill="#1e1e2e" stroke="#6366f1" stroke-opacity="0.5"/>
+  <text x="410" y="160" fill="#64748b" font-size="12">Users</text>
+  <text x="410" y="200" fill="#fff" font-size="28" font-weight="bold">8,432</text>
+  <rect x="680" y="120" width="440" height="120" rx="16" fill="#1e1e2e" stroke="#8b5cf6" stroke-opacity="0.5"/>
+  <text x="710" y="160" fill="#64748b" font-size="12">Orders today</text>
+  <text x="710" y="200" fill="#fff" font-size="28" font-weight="bold">342</text>
+  <rect x="80" y="280" width="1040" height="280" rx="16" fill="#1e1e2e" stroke="#6366f1" stroke-opacity="0.4"/>
+  <rect x="120" y="380" width="60" height="140" rx="6" fill="#6366f1"/>
+  <rect x="200" y="340" width="60" height="180" rx="6" fill="#818cf8"/>
+  <rect x="280" y="400" width="60" height="120" rx="6" fill="#6366f1"/>
+  <rect x="360" y="360" width="60" height="160" rx="6" fill="#a5b4fc"/>
+  <rect x="440" y="320" width="60" height="200" rx="6" fill="#6366f1"/>
+</svg>

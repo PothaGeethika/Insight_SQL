@@ -261,8 +261,8 @@ export default function ChatPage() {
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [isGeneratingSuggestions, setIsGeneratingSuggestions] = useState(false);
 
-  const [provider, setProvider] = useState<string>("gemini");
-  const [model, setModel] = useState<string>("gemini-2.0-flash");
+  const [provider, setProvider] = useState<string>(process.env.NEXT_PUBLIC_LLM_PROVIDER || "groq");
+  const [model, setModel] = useState<string>(process.env.NEXT_PUBLIC_LLM_MODEL || "llama-3.1-70b-versatile");
   const [databases, setDatabases] = useState<any[]>([]);
   const [selectedDb, setSelectedDb] = useState<string>("");
   const [selectedDbs, setSelectedDbs] = useState<string[]>([]);
@@ -467,7 +467,7 @@ export default function ChatPage() {
         payload.schema_name = schemaName;
         payload.role = role;
       } else {
-        payload.host = host || "localhost";
+        payload.host = host;
         payload.port = port ? parseInt(port) : getDefaultPort(dbType);
       }
     }
@@ -659,7 +659,7 @@ export default function ChatPage() {
       setConnectionString(connStr);
       setConnectionMethod(existing.host || existing.username || existing.account ? "params" : "string");
     } else {
-      setHost("localhost");
+      setHost("");
       setPort("");
       setDatabaseName("");
       setUsername("");
@@ -3498,7 +3498,7 @@ export default function ChatPage() {
                             <Input
                               value={host}
                               onChange={(e) => setHost(e.target.value)}
-                              placeholder="localhost"
+                              placeholder="db.example.com"
                               className="bg-slate-900 border-slate-800 focus:border-indigo-500 h-10 rounded-xl text-xs text-white"
                             />
                           </div>

@@ -1,5 +1,5 @@
 {
-  "nextId": 5,
+  "nextId": 6,
   "users": [
     {
       "id": 1,
@@ -28,6 +28,13 @@
       "email": "google_user@example.com",
       "password": "$2b$10$cM2J60IA.L6nY/NonoBJfeQMagMH39Qh4MyyZWcrBY9DFjKjx3cb.",
       "created_at": "2026-06-26T09:17:09.880Z"
+    },
+    {
+      "id": 5,
+      "name": "Praveen Martin",
+      "email": "praveenmartin.allamsetti@gmail.com",
+      "password": "$2b$10$/ZSraAM8wanT8D3ZcKWMNuYOUNiFtNl58Jaw34cEgqvC7btKhsk5i",
+      "created_at": "2026-06-29T07:18:02.917Z"
     }
   ]
 }

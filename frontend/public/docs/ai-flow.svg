@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="640" viewBox="0 0 1200 640" fill="none">
+  <rect width="1200" height="640" fill="#0a0a12"/>
+  <text x="600" y="60" text-anchor="middle" fill="#94a3b8" font-family="system-ui,sans-serif" font-size="14" font-weight="600">AI WORKFLOW</text>
+  <circle cx="200" cy="320" r="64" fill="#1e3a5f" stroke="#3b82f6" stroke-width="2"/>
+  <text x="200" y="328" text-anchor="middle" fill="#e2e8f0" font-size="12">Database</text>
+  <circle cx="450" cy="320" r="64" fill="#312e81" stroke="#6366f1" stroke-width="2"/>
+  <text x="450" y="328" text-anchor="middle" fill="#e2e8f0" font-size="12">InsightSQL</text>
+  <circle cx="700" cy="320" r="64" fill="#3b0764" stroke="#a855f7" stroke-width="2"/>
+  <text x="700" y="328" text-anchor="middle" fill="#e2e8f0" font-size="12">AI</text>
+  <circle cx="950" cy="320" r="64" fill="#064e3b" stroke="#10b981" stroke-width="2"/>
+  <text x="950" y="328" text-anchor="middle" fill="#e2e8f0" font-size="12">Charts</text>
+  <path d="M264 320 H386" stroke="#6366f1" stroke-width="3"/>
+  <path d="M514 320 H636" stroke="#8b5cf6" stroke-width="3"/>
+  <path d="M764 320 H886" stroke="#10b981" stroke-width="3"/>
+  <polygon points="386,315 386,325 398,320" fill="#6366f1"/>
+  <polygon points="636,315 636,325 648,320" fill="#8b5cf6"/>
+  <polygon points="886,315 886,325 898,320" fill="#10b981"/>
+</svg>
