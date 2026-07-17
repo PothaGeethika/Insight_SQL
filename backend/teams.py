@@ -13,7 +13,6 @@ Roles: owner | admin | member | viewer
 import json
 import os
 import secrets
-import sqlite3
 import time
 import uuid
 import smtplib
@@ -23,6 +22,7 @@ from typing import Optional
 
 from logger_config import get_logger
 from config import _require_env
+from sqlite_db import connect as sqlite_connect
 
 log = get_logger("teams")
 _DB_PATH = _require_env("USER_DATA_DB")
@@ -30,13 +30,8 @@ _DB_PATH = _require_env("USER_DATA_DB")
 
 @contextmanager
 def _conn():
-    con = sqlite3.connect(_DB_PATH)
-    con.row_factory = sqlite3.Row
-    try:
+    with sqlite_connect(_DB_PATH) as con:
         yield con
-        con.commit()
-    finally:
-        con.close()
 
 
 ROLES = ("owner", "admin", "member", "viewer")
@@ -211,6 +206,71 @@ def remove_member(org_id: str, user_id: str):
 
 # ── Invite helpers ────────────────────────────────────────────────────────
 
+def _resolve_smtp_settings(smtp_user: str) -> tuple[str, int]:
+    """
+    Pick SMTP host/port from env, or infer from the sender email domain.
+
+    Recipient mailbox (Gmail, Outlook, etc.) does not matter — only the
+    *sending* account's provider does.
+    """
+    explicit_host = os.getenv("SMTP_HOST", "").strip()
+    explicit_port = os.getenv("SMTP_PORT", "").strip()
+
+    domain = (smtp_user.split("@")[-1] if "@" in smtp_user else "").lower()
+
+    # Common provider presets (host, port)
+    presets: dict[str, tuple[str, int]] = {
+        "gmail.com": ("smtp.gmail.com", 587),
+        "googlemail.com": ("smtp.gmail.com", 587),
+        "outlook.com": ("smtp.office365.com", 587),
+        "hotmail.com": ("smtp.office365.com", 587),
+        "live.com": ("smtp.office365.com", 587),
+        "msn.com": ("smtp.office365.com", 587),
+        "office365.com": ("smtp.office365.com", 587),
+        "yahoo.com": ("smtp.mail.yahoo.com", 587),
+        "yahoo.co.in": ("smtp.mail.yahoo.com", 587),
+        "icloud.com": ("smtp.mail.me.com", 587),
+        "me.com": ("smtp.mail.me.com", 587),
+    }
+
+    inferred_host, inferred_port = presets.get(domain, ("smtp.gmail.com", 587))
+
+    # Explicit env wins when set (and not leftover placeholders)
+    host = explicit_host if explicit_host and explicit_host not in ("smtp.example.com",) else inferred_host
+    if explicit_port:
+        try:
+            port = int(explicit_port)
+        except ValueError:
+            port = inferred_port
+    else:
+        port = inferred_port
+
+    # If user set Gmail host but email is Outlook (or vice versa) and HOST was
+    # left as the old default, prefer domain inference when it conflicts with
+    # a clearly wrong default for that domain.
+    if explicit_host == "smtp.gmail.com" and domain in (
+        "outlook.com", "hotmail.com", "live.com", "msn.com", "office365.com"
+    ):
+        host, port = inferred_host, inferred_port
+        log.info(
+            "[TEAMS] SMTP_HOST was smtp.gmail.com but sender is %s — using %s",
+            domain,
+            host,
+        )
+    # Reverse mismatch: Office365 host with a Gmail sender → use Gmail SMTP.
+    if explicit_host in ("smtp.office365.com", "smtp-mail.outlook.com") and domain in (
+        "gmail.com", "googlemail.com"
+    ):
+        host, port = inferred_host, inferred_port
+        log.info(
+            "[TEAMS] SMTP_HOST was %s but sender is Gmail — using %s",
+            explicit_host,
+            host,
+        )
+
+    return host, port
+
+
 def create_invite(org_id: str, email: str, role: str, invited_by: str) -> dict:
     if role not in ROLES:
         raise ValueError(f"Invalid role '{role}'.")
@@ -229,75 +289,130 @@ def create_invite(org_id: str, email: str, role: str, invited_by: str) -> dict:
     # Send email
     try:
         from email.mime.multipart import MIMEMultipart
-        app_base_url = _require_env("FRONTEND_URL")
+        from email.utils import formataddr, make_msgid
+        app_base_url = _require_env("FRONTEND_URL").rstrip("/")
         invite_link = f"{app_base_url}/invite?token={token}"
-        
-        html_body = f"""
-        <html>
-        <body style="font-family: Arial, sans-serif; background: #f8fafc; margin: 0; padding: 0;">
-          <div style="max-width: 520px; margin: 40px auto; background: #ffffff; border-radius: 12px;
-                      box-shadow: 0 4px 24px rgba(0,0,0,0.08); overflow: hidden;">
-            <div style="background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
-                        padding: 36px 40px; text-align: center;">
-              <h1 style="color: #ffffff; margin: 0; font-size: 24px;">InsightSQL</h1>
-              <p style="color: rgba(255,255,255,0.8); margin: 8px 0 0;">Workspace Invitation</p>
-            </div>
-            <div style="padding: 40px;">
-              <h2 style="margin: 0 0 16px; color: #0f172a; font-size: 20px;">You have been invited!</h2>
-              <p style="color: #475569; line-height: 1.6; margin: 0 0 12px;">
+        role_label = role.capitalize()
+
+        # Table-based HTML: Outlook strips gradients / many CSS properties.
+        html_body = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>InsightSQL invitation</title>
+</head>
+<body style="margin:0;padding:0;background-color:#f1f5f9;font-family:Arial,Helvetica,sans-serif;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f1f5f9;padding:24px 12px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="520" cellpadding="0" cellspacing="0" border="0" style="max-width:520px;width:100%;background-color:#ffffff;border:1px solid #e2e8f0;">
+          <tr>
+            <td align="center" bgcolor="#4f46e5" style="background-color:#4f46e5;padding:28px 24px;">
+              <p style="margin:0;font-size:22px;font-weight:bold;color:#ffffff;">InsightSQL</p>
+              <p style="margin:8px 0 0;font-size:14px;color:#e0e7ff;">Workspace Invitation</p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:28px 24px;color:#0f172a;">
+              <h1 style="margin:0 0 12px;font-size:20px;color:#0f172a;">You have been invited</h1>
+              <p style="margin:0 0 12px;font-size:15px;line-height:1.5;color:#334155;">
                 You have been invited to join a workspace on <strong>InsightSQL</strong>
-                as a <strong style="color: #4f46e5;">{role.capitalize()}</strong>.
+                as a <strong>{role_label}</strong>.
               </p>
-              <p style="color: #475569; line-height: 1.6; margin: 0 0 28px;">
-                Click the button below to accept your invitation. This link will expire in <strong>48 hours</strong>.
+              <p style="margin:0 0 24px;font-size:15px;line-height:1.5;color:#334155;">
+                Click the button below to accept. This link expires in <strong>48 hours</strong>.
               </p>
-              <div style="text-align: center; margin-bottom: 28px;">
-                <a href="{invite_link}"
-                   style="display: inline-block; background: linear-gradient(135deg, #4f46e5, #7c3aed);
-                          color: #ffffff; padding: 14px 32px; border-radius: 8px;
-                          text-decoration: none; font-weight: 600; font-size: 16px;">
-                  Accept Invitation
-                </a>
-              </div>
-              <p style="color: #94a3b8; font-size: 12px; line-height: 1.6; margin: 0;">
-                Or copy this link: <a href="{invite_link}" style="color: #4f46e5;">{invite_link}</a>
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center" style="margin:0 auto 24px;">
+                <tr>
+                  <td align="center" bgcolor="#4f46e5" style="background-color:#4f46e5;border-radius:6px;">
+                    <a href="{invite_link}"
+                       style="display:inline-block;padding:14px 28px;font-size:16px;font-weight:bold;color:#ffffff;text-decoration:none;background-color:#4f46e5;">
+                      Accept Invitation
+                    </a>
+                  </td>
+                </tr>
+              </table>
+              <p style="margin:0;font-size:12px;line-height:1.5;color:#64748b;">
+                If the button does not work, copy and paste this link into your browser:<br />
+                <a href="{invite_link}" style="color:#4f46e5;word-break:break-all;">{invite_link}</a>
               </p>
-            </div>
-            <div style="background: #f1f5f9; padding: 20px 40px; text-align: center;">
-              <p style="color: #94a3b8; font-size: 12px; margin: 0;">
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:16px 24px;background-color:#f8fafc;border-top:1px solid #e2e8f0;">
+              <p style="margin:0;font-size:12px;color:#94a3b8;text-align:center;">
                 If you did not expect this invitation, you can safely ignore this email.
               </p>
-            </div>
-          </div>
-        </body>
-        </html>
-        """
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>"""
 
-        smtp_user = _require_env("SMTP_EMAIL")
-        smtp_pass = _require_env("SMTP_PASSWORD")
-        smtp_host = _require_env("SMTP_HOST")
-        smtp_port = int(_require_env("SMTP_PORT"))
+        smtp_user = _require_env("SMTP_EMAIL").strip()
+        # App passwords are often copied with spaces — strip them.
+        smtp_pass = _require_env("SMTP_PASSWORD").replace(" ", "").strip()
+        smtp_host, smtp_port = _resolve_smtp_settings(smtp_user)
+
+        if not smtp_user or smtp_user.endswith("@example.com") or smtp_pass in ("", "your_app_password"):
+            raise RuntimeError(
+                "SMTP is not configured. Set SMTP_EMAIL and SMTP_PASSWORD in backend/.env "
+                "(Gmail App Password, or Outlook/Microsoft 365 password / app password)."
+            )
+
+        log.info(
+            "[TEAMS] Sending invite via SMTP %s:%s as %s → %s",
+            smtp_host,
+            smtp_port,
+            smtp_user,
+            email,
+        )
 
         msg = MIMEMultipart("alternative")
-        msg["Subject"] = "You've been invited to InsightSQL"
-        msg["From"] = smtp_user
+        msg["Subject"] = "InsightSQL workspace invitation"
+        msg["From"] = formataddr(("InsightSQL", smtp_user))
         msg["To"] = email
+        msg["Reply-To"] = smtp_user
+        msg["Message-ID"] = make_msgid(domain=smtp_user.split("@")[-1] if "@" in smtp_user else "insightsql.local")
+        msg["X-Auto-Response-Suppress"] = "OOF, AutoReply"
         plain = MIMEText(
-            f"You have been invited to InsightSQL as a {role}.\n\nAccept here: {invite_link}\n\nThis link expires in 48 hours.",
-            "plain"
+            f"You have been invited to InsightSQL as a {role}.\n\n"
+            f"Accept here: {invite_link}\n\n"
+            f"This link expires in 48 hours.\n\n"
+            f"If you did not expect this, ignore this email.",
+            "plain",
+            "utf-8",
         )
-        html = MIMEText(html_body, "html")
+        html = MIMEText(html_body, "html", "utf-8")
         msg.attach(plain)
         msg.attach(html)
-        with smtplib.SMTP(smtp_host, smtp_port) as server:
+        with smtplib.SMTP(smtp_host, smtp_port, timeout=20) as server:
+            server.ehlo()
             server.starttls()
+            server.ehlo()
             server.login(smtp_user, smtp_pass)
             server.send_message(msg)
-        log.info(f"[TEAMS] Email sent successfully to {email}")
+        log.info("[TEAMS] Email sent successfully to %s", email)
+        email_sent = True
+        email_error = None
     except Exception as e:
-        log.warning(f"[TEAMS] Could not send email: {e}")
+        email_sent = False
+        email_error = str(e)
+        log.warning("[TEAMS] Could not send email to %s: %s", email, e)
 
-    return {"id": invite_id, "token": token, "email": email, "role": role, "expires_at": expires_at}
+    return {
+        "id": invite_id,
+        "token": token,
+        "email": email,
+        "role": role,
+        "expires_at": expires_at,
+        "email_sent": email_sent,
+        "email_error": email_error,
+    }
 
 
 def list_invites(org_id: str) -> list[dict]:
@@ -312,12 +427,21 @@ def list_invites(org_id: str) -> list[dict]:
 def accept_invite(token: str, user_id: str) -> Optional[dict]:
     with _conn() as con:
         invite = con.execute(
-            "SELECT * FROM org_invites WHERE token = ? AND accepted = 0 AND expires_at > ?",
+            "SELECT * FROM org_invites WHERE token = ? AND expires_at > ?",
             (token, time.time()),
         ).fetchone()
         if not invite:
             return None
         invite = dict(invite)
+        if invite["accepted"]:
+            # Idempotent: if this user already joined via this invite (e.g. the
+            # link was clicked twice, or React fired the request twice in dev),
+            # treat it as success instead of "already used".
+            member = con.execute(
+                "SELECT 1 FROM org_members WHERE org_id = ? AND user_id = ?",
+                (invite["org_id"], user_id),
+            ).fetchone()
+            return invite if member else None
         # Add to org
         con.execute(
             "INSERT OR IGNORE INTO org_members (org_id, user_id, role) VALUES (?,?,?)",

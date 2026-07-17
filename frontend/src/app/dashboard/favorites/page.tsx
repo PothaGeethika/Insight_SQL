@@ -33,9 +33,13 @@ import {
   DropdownMenuTrigger,
   DropdownMenuGroup,
 } from "@/components/ui/dropdown-menu";
+import { api } from "@/lib/apiClient";
+import { useWorkspace } from "@/lib/workspace";
+import { toast } from "sonner";
 
 export default function FavoritesPage() {
   const router = useRouter();
+  const { activeOrgId } = useWorkspace();
   const [searchQuery, setSearchQuery] = useState("");
   const [activeTab, setActiveTab] = useState("all");
   const [sortBy, setSortBy] = useState("newest");
@@ -46,50 +50,56 @@ export default function FavoritesPage() {
   const [favProjects, setFavProjects] = useState<any[]>([]);
   const [favFolders, setFavFolders] = useState<any[]>([]);
 
-  const loadFavorites = () => {
-    // 1. Load Favorite Databases
+  const loadFavorites = async () => {
+    // 1. Load Favorite Databases (still local preference list)
     const savedDbIds = JSON.parse(localStorage.getItem("db_favorites") || "[]");
-    fetch("/api/backend/databases")
-      .then(res => res.json())
-      .then(data => {
+    api.databases
+      .list(activeOrgId)
+      .then((data) => {
         if (Array.isArray(data)) {
-          const favoritedDbs = data.filter(db => savedDbIds.includes(db.id));
-          setFavDatabases(favoritedDbs);
+          setFavDatabases(data.filter((db) => savedDbIds.includes(db.id)));
         }
       })
-      .catch(err => {
-        console.error("Error fetching databases for favorites:", err);
-        // Offline / mock fallback databases if present
-        setFavDatabases([]);
-      });
+      .catch(() => setFavDatabases([]));
 
-    // 2. Load Favorite Questions
-    const savedFavQueries = JSON.parse(localStorage.getItem("favorite_queries") || "[]");
-    setFavQuestions(savedFavQueries);
+    // 2. Load Saved / Favorite Queries from backend
+    try {
+      const data = await api.savedQueries.list(activeOrgId);
+      setFavQuestions(Array.isArray(data) ? data : []);
+    } catch {
+      setFavQuestions([]);
+    }
 
-    // 3. Load Favorite Projects from Backend API
-    fetch("/api/backend/projects")
-      .then(res => res.json())
-      .then(data => {
-        if (Array.isArray(data)) {
-          const favoritedProjects = data.filter((p: any) => p.isFavorite);
-          setFavProjects(favoritedProjects);
-        }
-      })
-      .catch(err => {
-        console.error("Error fetching projects for favorites:", err);
-        setFavProjects([]);
-      });
+    // 3. Load Favorite Projects
+    try {
+      const data = await api.projects.list(activeOrgId);
+      if (Array.isArray(data)) {
+        setFavProjects(data.filter((p: any) => p.isFavorite || p.is_favorite));
+      }
+    } catch {
+      setFavProjects([]);
+    }
 
     // 4. Load Favorite History (Sessions)
-    const savedSessions = JSON.parse(localStorage.getItem("chat_sessions") || "[]");
-    const favoritedSessions = savedSessions.filter((s: any) => s.isFavorite);
-    setFavFolders(favoritedSessions);
+    try {
+      const data = await api.history.list(activeOrgId);
+      if (Array.isArray(data)) {
+        setFavFolders(
+          data.filter((s: any) => s.isFavorite || s.is_favorite).map((s: any) => ({
+            ...s,
+            isFavorite: true,
+            title: s.title,
+          }))
+        );
+      }
+    } catch {
+      setFavFolders([]);
+    }
   };
 
   useEffect(() => {
     loadFavorites();
-  }, []);
+  }, [activeOrgId]);
 
   const handleOpenChat = (sessionId: string) => {
     if (sessionId) {
@@ -113,41 +123,43 @@ export default function FavoritesPage() {
     setFavDatabases(favDatabases.filter((db: any) => db.id !== dbId));
   };
 
-  const handleRemoveFavoriteQuestion = (qId: string) => {
-    const saved = JSON.parse(localStorage.getItem("favorite_queries") || "[]");
-    const updated = saved.filter((q: any) => q.id !== qId);
-    localStorage.setItem("favorite_queries", JSON.stringify(updated));
-    setFavQuestions(updated);
+  const handleRemoveFavoriteQuestion = async (qId: string) => {
+    try {
+      await api.savedQueries.delete(qId);
+      setFavQuestions((prev) => prev.filter((q: any) => q.id !== qId));
+      toast.success("Removed from saved queries");
+    } catch (e) {
+      console.error("Error removing favorite query:", e);
+      toast.error("Failed to remove");
+    }
   };
 
   const handleRemoveFavoriteProject = async (projectId: string) => {
-    const project = favProjects.find(p => p.id === projectId);
+    const project = favProjects.find((p) => p.id === projectId);
     if (!project) return;
     try {
-      const res = await fetch(`/api/backend/projects/${projectId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...project, isFavorite: false }),
-        credentials: "include"
-      });
-      if (res.ok) {
-        loadFavorites();
-      }
+      await api.projects.update(projectId, { ...project, isFavorite: false });
+      loadFavorites();
     } catch (e) {
       console.error("Error removing favorite project:", e);
     }
   };
 
-  const handleRemoveFavoriteHistory = (sessionId: string) => {
-    const saved = JSON.parse(localStorage.getItem("chat_sessions") || "[]");
-    const updated = saved.map((s: any) => {
-      if (s.id === sessionId) {
-        return { ...s, isFavorite: false };
-      }
-      return s;
-    });
-    localStorage.setItem("chat_sessions", JSON.stringify(updated));
-    setFavFolders(updated.filter((s: any) => s.isFavorite));
+  const handleRemoveFavoriteHistory = async (sessionId: string) => {
+    const session = favFolders.find((s) => s.id === sessionId);
+    if (!session) return;
+    try {
+      await api.history.upsert(sessionId, {
+        title: session.title,
+        isFavorite: false,
+        updatedAt: Date.now(),
+        org_id: activeOrgId,
+        messages: session.messages,
+      });
+      setFavFolders((prev) => prev.filter((s) => s.id !== sessionId));
+    } catch (e) {
+      console.error("Error removing favorite session:", e);
+    }
   };
 
   // Filter and Sort logic

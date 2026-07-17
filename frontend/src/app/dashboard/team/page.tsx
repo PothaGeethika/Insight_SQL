@@ -16,6 +16,8 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { toast } from "sonner";
+import { useWorkspace } from "@/lib/workspace";
+import { api } from "@/lib/apiClient";
 
 // ── Types ────────────────────────────────────────────────────────────────
 
@@ -59,6 +61,14 @@ function MemberAvatar({ member }: { member: Member }) {
 // ── Main page ─────────────────────────────────────────────────────────────
 
 export default function TeamPage() {
+  const {
+    orgs: workspaceOrgs,
+    activeOrgId: workspaceActiveOrgId,
+    setActiveOrgId: setWorkspaceActiveOrgId,
+    refreshOrgs,
+    refreshPendingInvites,
+    canManage: workspaceCanManage,
+  } = useWorkspace();
   const [orgs, setOrgs] = useState<Org[]>([]);
   const [activeOrg, setActiveOrg] = useState<Org | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
@@ -89,11 +99,16 @@ export default function TeamPage() {
   const load = async () => {
     setLoading(true);
     try {
-      const res = await fetch("/api/backend/orgs", { credentials: "include" });
-      if (!res.ok) throw new Error();
-      const data: Org[] = await res.json();
-      setOrgs(data);
-      if (data.length > 0 && !activeOrg) setActiveOrg(data[0]);
+      const data = await refreshOrgs();
+      setOrgs(data as Org[]);
+      const preferred =
+        (data.find((o) => o.id === workspaceActiveOrgId) as Org | undefined) ||
+        (data[0] as Org | undefined) ||
+        null;
+      if (preferred) {
+        setActiveOrg(preferred);
+        setWorkspaceActiveOrgId(preferred.id);
+      }
     } catch {
       setOrgs([]);
     } finally {
@@ -103,18 +118,28 @@ export default function TeamPage() {
 
   const loadOrgData = async (org: Org) => {
     try {
-      const [mRes, iRes] = await Promise.all([
-        fetch(`/api/backend/orgs/${org.id}/members`, { credentials: "include" }),
-        fetch(`/api/backend/orgs/${org.id}/invites`, { credentials: "include" }),
+      const [membersData, invitesData] = await Promise.all([
+        api.orgs.members(org.id).catch(() => []),
+        api.orgs.invites(org.id).catch(() => []),
       ]);
-      if (mRes.ok) setMembers(await mRes.json());
-      if (iRes.ok) setInvites(await iRes.json());
+      setMembers(Array.isArray(membersData) ? membersData : []);
+      setInvites(Array.isArray(invitesData) ? invitesData : []);
+      refreshPendingInvites();
     } catch {
       /* non-admin won't see invites — that's fine */
     }
   };
 
   useEffect(() => { load(); }, []);
+  useEffect(() => {
+    if (workspaceOrgs.length) setOrgs(workspaceOrgs as Org[]);
+  }, [workspaceOrgs]);
+  useEffect(() => {
+    if (workspaceActiveOrgId && orgs.length) {
+      const match = orgs.find((o) => o.id === workspaceActiveOrgId);
+      if (match && match.id !== activeOrg?.id) setActiveOrg(match);
+    }
+  }, [workspaceActiveOrgId, orgs]);
   useEffect(() => { if (activeOrg) loadOrgData(activeOrg); }, [activeOrg]);
 
   // Focus rename input when it appears
@@ -140,6 +165,8 @@ export default function TeamPage() {
       const org: Org = await res.json();
       setOrgs((prev) => [org, ...prev]);
       setActiveOrg(org);
+      setWorkspaceActiveOrgId(org.id);
+      await refreshOrgs();
       setNewOrgName("");
       setShowCreateOrg(false);
       toast.success(`Workspace "${org.name}" created!`);
@@ -211,11 +238,19 @@ export default function TeamPage() {
         body: JSON.stringify({ email: inviteEmail.trim(), role: inviteRole }),
       });
       if (!res.ok) throw new Error((await res.json()).detail);
-      const invite: Invite = await res.json();
+      const invite: Invite & { email_sent?: boolean; email_error?: string | null } = await res.json();
       setInvites((prev) => [...prev, invite]);
       setInviteEmail("");
       setShowInviteForm(false);
-      toast.success(`Invite sent to ${invite.email}! 📧`);
+      refreshPendingInvites();
+      if (invite.email_sent === false) {
+        toast.warning(
+          `Invite created for ${invite.email}, but email failed to send. Use Copy link to share manually.`,
+          { duration: 8000 }
+        );
+      } else {
+        toast.success(`Invite email sent to ${invite.email}`);
+      }
     } catch (e: any) {
       toast.error(e.message || "Failed to send invite");
     } finally {
@@ -413,7 +448,10 @@ export default function TeamPage() {
                       : "hover:bg-muted text-muted-foreground hover:text-foreground"
                   }`}>
                     <button
-                      onClick={() => setActiveOrg(org)}
+                      onClick={() => {
+                        setActiveOrg(org);
+                        setWorkspaceActiveOrgId(org.id);
+                      }}
                       className="flex items-center gap-2 flex-1 min-w-0"
                     >
                       <div className="h-6 w-6 rounded-md bg-indigo-500/10 flex items-center justify-center flex-shrink-0">

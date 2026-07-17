@@ -1,12 +1,12 @@
 """
-Stripe billing integration.
+Stripe billing integration + plan limits / usage tracking.
 
-Plans:
-  free       — always available, no Stripe required
-  pro        — $29/month  (price ID: STRIPE_PRICE_PRO)
-  enterprise — custom     (price ID: STRIPE_PRICE_ENTERPRISE)
+Plans (aligned with Billing UI):
+  free       — 1 connection, 100 queries/month
+  pro        — 10 connections, 5,000 queries/month  ($29/mo)
+  enterprise — unlimited connections & queries
 
-Required env vars:
+Required env vars (Stripe optional for free-tier gating):
   STRIPE_SECRET_KEY
   STRIPE_WEBHOOK_SECRET
   STRIPE_PRICE_PRO
@@ -14,27 +14,44 @@ Required env vars:
   FRONTEND_URL              (e.g. http://127.0.0.1:3000)
 """
 
+from __future__ import annotations
+
 import os
-import json
-import sqlite3
-from contextlib import contextmanager
+from datetime import datetime, timezone
+from typing import Any, Optional
+
 from logger_config import get_logger
 from config import _require_env
+from sqlite_db import connect as sqlite_connect
 
 log = get_logger("billing")
 
 _DB_PATH = _require_env("USER_DATA_DB")
 
+# None means unlimited
+PLAN_LIMITS: dict[str, dict[str, Optional[int]]] = {
+    "free": {"max_connections": 1, "max_queries_per_month": 100},
+    "pro": {"max_connections": 10, "max_queries_per_month": 5000},
+    "enterprise": {"max_connections": None, "max_queries_per_month": None},
+}
 
-@contextmanager
+
+class PlanLimitExceeded(Exception):
+    """Raised when a plan quota is exceeded. Map to HTTP 402 in the API layer."""
+
+    def __init__(self, message: str, *, code: str = "plan_limit"):
+        super().__init__(message)
+        self.message = message
+        self.code = code
+
+
 def _conn():
-    con = sqlite3.connect(_DB_PATH)
-    con.row_factory = sqlite3.Row
-    try:
-        yield con
-        con.commit()
-    finally:
-        con.close()
+    return sqlite_connect(_DB_PATH)
+
+
+def _year_month(now: Optional[datetime] = None) -> str:
+    dt = now or datetime.now(timezone.utc)
+    return dt.strftime("%Y-%m")
 
 
 def init_billing_tables():
@@ -49,6 +66,18 @@ def init_billing_tables():
                 current_period_end INTEGER,
                 updated_at       REAL NOT NULL DEFAULT (unixepoch())
             );
+
+            CREATE TABLE IF NOT EXISTS usage_monthly (
+                user_id      TEXT NOT NULL,
+                year_month   TEXT NOT NULL,
+                query_count  INTEGER NOT NULL DEFAULT 0,
+                org_id       TEXT,
+                updated_at   REAL NOT NULL DEFAULT (unixepoch()),
+                PRIMARY KEY (user_id, year_month)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_usage_monthly_org
+                ON usage_monthly(org_id, year_month);
         """)
 
 
@@ -57,14 +86,58 @@ init_billing_tables()
 
 # ── Subscription helpers ──────────────────────────────────────────────────
 
-def get_subscription(user_id: str) -> dict:
+def get_plan(user_id: str) -> str:
+    sub = get_subscription(user_id, include_usage=False)
+    plan = (sub.get("plan") or "free").lower()
+    if plan not in PLAN_LIMITS:
+        return "free"
+    # Treat non-active paid subs as free for limits
+    status = (sub.get("status") or "active").lower()
+    if plan != "free" and status not in ("active", "trialing"):
+        return "free"
+    return plan
+
+
+def get_limits(plan: str) -> dict[str, Optional[int]]:
+    return dict(PLAN_LIMITS.get(plan, PLAN_LIMITS["free"]))
+
+
+def get_monthly_query_count(user_id: str, year_month: Optional[str] = None) -> int:
+    ym = year_month or _year_month()
+    with _conn() as con:
+        row = con.execute(
+            "SELECT query_count FROM usage_monthly WHERE user_id = ? AND year_month = ?",
+            (user_id, ym),
+        ).fetchone()
+    return int(row["query_count"]) if row else 0
+
+
+def get_subscription(user_id: str, *, include_usage: bool = True) -> dict:
     with _conn() as con:
         row = con.execute(
             "SELECT * FROM subscriptions WHERE user_id = ?", (user_id,)
         ).fetchone()
     if row:
-        return dict(row)
-    return {"user_id": user_id, "plan": "free", "status": "active"}
+        sub: dict[str, Any] = dict(row)
+    else:
+        sub = {"user_id": user_id, "plan": "free", "status": "active"}
+
+    plan = (sub.get("plan") or "free").lower()
+    if plan not in PLAN_LIMITS:
+        plan = "free"
+    limits = get_limits(plan)
+
+    if include_usage:
+        ym = _year_month()
+        queries = get_monthly_query_count(user_id, ym)
+        sub["limits"] = limits
+        sub["usage"] = {
+            "year_month": ym,
+            "queries_this_month": queries,
+            "queries_limit": limits["max_queries_per_month"],
+            "connections_limit": limits["max_connections"],
+        }
+    return sub
 
 
 def upsert_subscription(user_id: str, data: dict):
@@ -87,6 +160,60 @@ def upsert_subscription(user_id: str, data: dict):
             "status": data.get("status", "active"),
             "current_period_end": data.get("current_period_end"),
         })
+
+
+# ── Plan gating ───────────────────────────────────────────────────────────
+
+def assert_can_add_connection(user_id: str, current_connection_count: int) -> None:
+    plan = get_plan(user_id)
+    limit = get_limits(plan)["max_connections"]
+    if limit is None:
+        return
+    if current_connection_count >= limit:
+        raise PlanLimitExceeded(
+            f"Your {plan} plan allows {limit} database connection(s). "
+            f"Upgrade to add more.",
+            code="connection_limit",
+        )
+
+
+def consume_query_quota(user_id: str, *, org_id: Optional[str] = None, amount: int = 1) -> int:
+    """
+    Atomically increment monthly query usage if under the plan limit.
+    Returns the new count. Raises PlanLimitExceeded when over quota.
+    """
+    if amount < 1:
+        amount = 1
+    plan = get_plan(user_id)
+    limit = get_limits(plan)["max_queries_per_month"]
+    ym = _year_month()
+
+    with _conn() as con:
+        row = con.execute(
+            "SELECT query_count FROM usage_monthly WHERE user_id = ? AND year_month = ?",
+            (user_id, ym),
+        ).fetchone()
+        current = int(row["query_count"]) if row else 0
+
+        if limit is not None and current + amount > limit:
+            raise PlanLimitExceeded(
+                f"Monthly query limit reached ({limit} on the {plan} plan). "
+                f"Upgrade your plan or wait until next month.",
+                code="query_limit",
+            )
+
+        new_count = current + amount
+        con.execute("""
+            INSERT INTO usage_monthly (user_id, year_month, query_count, org_id, updated_at)
+            VALUES (?, ?, ?, ?, unixepoch())
+            ON CONFLICT(user_id, year_month) DO UPDATE SET
+                query_count = excluded.query_count,
+                org_id = COALESCE(excluded.org_id, usage_monthly.org_id),
+                updated_at = unixepoch()
+        """, (user_id, ym, new_count, org_id))
+
+    log.debug("[BILLING] usage user=%s ym=%s count=%d", user_id, ym, new_count)
+    return new_count
 
 
 # ── Stripe helpers ────────────────────────────────────────────────────────
@@ -115,7 +242,7 @@ def create_checkout_session(user_id: str, user_email: str, plan: str) -> str:
     if not price_id:
         raise ValueError(f"No Stripe price configured for plan '{plan}'.")
 
-    sub = get_subscription(user_id)
+    sub = get_subscription(user_id, include_usage=False)
     customer_id = sub.get("stripe_customer")
 
     # Create or retrieve Stripe customer
@@ -140,7 +267,7 @@ def create_checkout_session(user_id: str, user_email: str, plan: str) -> str:
 def create_portal_session(user_id: str) -> str:
     """Returns the Stripe Customer Portal URL."""
     stripe = _stripe()
-    sub = get_subscription(user_id)
+    sub = get_subscription(user_id, include_usage=False)
     customer_id = sub.get("stripe_customer")
     if not customer_id:
         raise ValueError("No Stripe customer found. Please subscribe first.")

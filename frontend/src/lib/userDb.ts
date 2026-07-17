@@ -10,7 +10,10 @@ import fs from "fs";
 import path from "path";
 import crypto from "crypto";
 
-const DB_DIR = process.env.SQLITE_DIR || path.join(process.cwd(), "data");
+const DB_DIR = process.env.SQLITE_DIR;
+if (!DB_DIR) {
+  throw new Error("Missing required environment variable: SQLITE_DIR");
+}
 const DB_PATH = path.join(DB_DIR, "users.json");
 
 // Legacy json-server file path — used for one-time migration only

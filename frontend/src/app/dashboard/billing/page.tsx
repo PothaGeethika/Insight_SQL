@@ -3,12 +3,12 @@
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import {
-  CreditCard, Check, Zap, Shield, Users, ArrowRight, Loader2,
-  ExternalLink, AlertCircle, CheckCircle2, Star,
+  CreditCard, Check, Zap, Shield, ArrowRight, Loader2,
+  ExternalLink, CheckCircle2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
 
@@ -70,11 +70,58 @@ const PLANS = [
   },
 ];
 
+interface UsageInfo {
+  year_month?: string;
+  queries_this_month?: number;
+  queries_limit?: number | null;
+  connections_used?: number;
+  connections_limit?: number | null;
+}
+
 interface Subscription {
   plan: string;
   status: string;
   current_period_end?: number;
   stripe_customer?: string;
+  usage?: UsageInfo;
+  limits?: {
+    max_connections?: number | null;
+    max_queries_per_month?: number | null;
+  };
+}
+
+function UsageMeter({
+  label,
+  used,
+  limit,
+}: {
+  label: string;
+  used: number;
+  limit: number | null | undefined;
+}) {
+  const unlimited = limit == null;
+  const pct = unlimited ? 0 : Math.min(100, Math.round((used / Math.max(limit, 1)) * 100));
+  const nearLimit = !unlimited && pct >= 80;
+
+  return (
+    <div className="space-y-1.5 min-w-[160px] flex-1">
+      <div className="flex items-center justify-between text-xs">
+        <span className="text-muted-foreground font-medium">{label}</span>
+        <span className={nearLimit ? "text-amber-500 font-semibold" : "text-foreground font-semibold"}>
+          {used.toLocaleString()}
+          {unlimited ? " / ∞" : ` / ${limit.toLocaleString()}`}
+        </span>
+      </div>
+      <div className="h-1.5 rounded-full bg-muted overflow-hidden">
+        <div
+          className={`h-full rounded-full transition-all ${
+            nearLimit ? "bg-amber-500" : "bg-indigo-500"
+          }`}
+          style={{ width: unlimited ? "8%" : `${pct}%` }}
+        />
+      </div>
+    </div>
+  );
 }
 
 export default function BillingPage() {
@@ -144,6 +191,14 @@ export default function BillingPage() {
     ? new Date(subscription.current_period_end * 1000).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })
     : null;
 
+  const usage = subscription?.usage;
+  const queriesUsed = usage?.queries_this_month ?? 0;
+  const queriesLimit =
+    usage?.queries_limit ?? subscription?.limits?.max_queries_per_month ?? null;
+  const connectionsUsed = usage?.connections_used ?? 0;
+  const connectionsLimit =
+    usage?.connections_limit ?? subscription?.limits?.max_connections ?? null;
+
   return (
     <div className="p-6 lg:p-8 max-w-5xl mx-auto space-y-8 overflow-y-auto h-full">
       {/* Header */}
@@ -159,39 +214,47 @@ export default function BillingPage() {
       {!loading && subscription && (
         <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}>
           <Card className={`border ${currentPlan === "pro" ? "border-indigo-500/40 bg-indigo-500/5" : "border-border"}`}>
-            <CardContent className="p-5 flex items-center justify-between flex-wrap gap-4">
-              <div className="flex items-center gap-4">
-                <div className={`h-11 w-11 rounded-xl flex items-center justify-center ${currentPlan === "pro" ? "bg-indigo-500/15" : "bg-muted"}`}>
-                  {currentPlan === "pro" ? <Zap className="h-5 w-5 text-indigo-400" /> : <Shield className="h-5 w-5 text-muted-foreground" />}
-                </div>
-                <div>
-                  <div className="flex items-center gap-2">
-                    <p className="font-bold text-base capitalize">{currentPlan} Plan</p>
-                    {subscription.status === "active" && (
-                      <Badge className="bg-emerald-500/10 text-emerald-500 border-emerald-500/20 text-xs">Active</Badge>
-                    )}
+            <CardContent className="p-5 space-y-5">
+              <div className="flex items-center justify-between flex-wrap gap-4">
+                <div className="flex items-center gap-4">
+                  <div className={`h-11 w-11 rounded-xl flex items-center justify-center ${currentPlan === "pro" ? "bg-indigo-500/15" : "bg-muted"}`}>
+                    {currentPlan === "pro" ? <Zap className="h-5 w-5 text-indigo-400" /> : <Shield className="h-5 w-5 text-muted-foreground" />}
                   </div>
-                  <p className="text-sm text-muted-foreground">
-                    {renewalDate ? `Renews on ${renewalDate}` : "No active subscription"}
-                  </p>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <p className="font-bold text-base capitalize">{currentPlan} Plan</p>
+                      {subscription.status === "active" && (
+                        <Badge className="bg-emerald-500/10 text-emerald-500 border-emerald-500/20 text-xs">Active</Badge>
+                      )}
+                    </div>
+                    <p className="text-sm text-muted-foreground">
+                      {renewalDate ? `Renews on ${renewalDate}` : "No active subscription"}
+                      {usage?.year_month ? ` · Usage for ${usage.year_month}` : ""}
+                    </p>
+                  </div>
                 </div>
+                {currentPlan !== "free" && subscription.stripe_customer && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handlePortal}
+                    disabled={portalLoading}
+                    className="text-sm"
+                  >
+                    {portalLoading ? (
+                      <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                    ) : (
+                      <ExternalLink className="h-4 w-4 mr-2" />
+                    )}
+                    Manage subscription
+                  </Button>
+                )}
               </div>
-              {currentPlan !== "free" && subscription.stripe_customer && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handlePortal}
-                  disabled={portalLoading}
-                  className="text-sm"
-                >
-                  {portalLoading ? (
-                    <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                  ) : (
-                    <ExternalLink className="h-4 w-4 mr-2" />
-                  )}
-                  Manage subscription
-                </Button>
-              )}
+
+              <div className="flex flex-col sm:flex-row gap-4 pt-1">
+                <UsageMeter label="Queries this month" used={queriesUsed} limit={queriesLimit} />
+                <UsageMeter label="Connections" used={connectionsUsed} limit={connectionsLimit} />
+              </div>
             </CardContent>
           </Card>
         </motion.div>
@@ -205,7 +268,6 @@ export default function BillingPage() {
         <div className="grid md:grid-cols-3 gap-5">
           {PLANS.map((plan, i) => {
             const isCurrent = currentPlan === plan.id;
-            const isHigher = plan.id === "pro" && currentPlan === "free";
 
             return (
               <motion.div

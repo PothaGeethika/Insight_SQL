@@ -100,11 +100,17 @@ import * as xlsx from 'xlsx';
 import * as htmlToImage from 'html-to-image';
 import { ChartRenderer } from "@/components/ChartRenderer";
 import { AutoDashboard, DashboardWidget } from "@/components/AutoDashboard";
+import { ChatApprovalCard } from "@/components/ChatApprovalCard";
+import { api, askStream, type AskResultSource } from "@/lib/apiClient";
+import { useWorkspace } from "@/lib/workspace";
+import { templatesForDbType } from "@/lib/queryTemplates";
+
 interface Message {
   id: string;
   role: "user" | "assistant";
   content: string;
   sql?: string;
+  mql?: string;
   generated_query?: string;
   query_type?: string;
   attachmentUrl?: string;
@@ -114,21 +120,41 @@ interface Message {
     headers: string[];
     rows: string[][];
   };
+  /** Pending / resolved mutating query approval in chat */
+  approval?: {
+    id: string;
+    status: "pending" | "approved" | "rejected" | "failed";
+    operation?: string;
+    connection_id?: string;
+    database?: string;
+    query?: string;
+    original_prompt?: string;
+    risk_level?: string;
+    reason?: string;
+    busy?: boolean;
+    error?: string;
+  };
+  /** Per-source results from multi-DB ask (B3) */
+  results?: AskResultSource[];
   visualization?: string | null;
   dashboardWidgets?: DashboardWidget[];
   versions?: {
     content: string;
     sql?: string;
+    mql?: string;
     generated_query?: string;
     query_type?: string;
     tableData?: any;
+    results?: AskResultSource[];
     timestamp: string;
     response?: {
       content: string;
       sql?: string;
+      mql?: string;
       generated_query?: string;
       query_type?: string;
       tableData?: any;
+      results?: AskResultSource[];
       timestamp: string;
     };
   }[];
@@ -230,6 +256,7 @@ const copyData = (tableData: { headers: string[]; rows: any[][] }) => {
 export default function ChatPage() {
   const { resolvedTheme } = useTheme();
   const isDark = resolvedTheme === "dark";
+  const { activeOrgId, refreshPendingApprovals, canManage } = useWorkspace();
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
@@ -262,7 +289,7 @@ export default function ChatPage() {
   const [isGeneratingSuggestions, setIsGeneratingSuggestions] = useState(false);
 
   const [provider, setProvider] = useState<string>(process.env.NEXT_PUBLIC_LLM_PROVIDER || "groq");
-  const [model, setModel] = useState<string>(process.env.NEXT_PUBLIC_LLM_MODEL || "llama-3.1-70b-versatile");
+  const [model, setModel] = useState<string>(process.env.NEXT_PUBLIC_LLM_MODEL || "llama-3.3-70b-versatile");
   const [databases, setDatabases] = useState<any[]>([]);
   const [selectedDb, setSelectedDb] = useState<string>("");
   const [selectedDbs, setSelectedDbs] = useState<string[]>([]);
@@ -314,6 +341,8 @@ export default function ChatPage() {
   const [isResultsOpen, setIsResultsOpen] = useState(false);
   const [activeResult, setActiveResult] = useState<any>(null);
   const [resultsTab, setResultsTab] = useState("results");
+  /** Index into activeResult.results[] for multi-DB tabs (B3) */
+  const [activeSourceIdx, setActiveSourceIdx] = useState(0);
 
   const [showWarningModal, setShowWarningModal] = useState(false);
   const [isTableModalOpen, setIsTableModalOpen] = useState(false);
@@ -770,10 +799,11 @@ export default function ChatPage() {
   }, [isResizingSummary]);
 
   useEffect(() => {
-    // If a new assistant message with tableData arrives, auto-open results
+    // If a new assistant message with tableData/results arrives, auto-open results
     const lastMsg = messages[messages.length - 1];
-    if (lastMsg?.role === "assistant" && lastMsg.tableData) {
+    if (lastMsg?.role === "assistant" && (lastMsg.tableData || (lastMsg.results && lastMsg.results.length > 0))) {
       setActiveResult(lastMsg);
+      setActiveSourceIdx(0);
       setIsResultsOpen(true);
     }
   }, [messages]);
@@ -1115,61 +1145,159 @@ export default function ChatPage() {
     }
 
     try {
-      const response = await fetch("/api/backend/ask", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({
+      const assistantMsgId =
+        thinkingMessages[thinkingMessages.length - 1]?.id ||
+        messages[userMsgIndex + 1]?.id ||
+        Date.now().toString() + "-assistant";
+      let accContent = "";
+      let finalSql: string | undefined;
+      let finalMql: string | undefined;
+      let finalTableData: any;
+      let finalResults: AskResultSource[] | undefined;
+      let finalVisualization: string | null = null;
+      let finalTimestamp = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+      await askStream(
+        {
           question: finalValue,
-          provider: provider,
-          model: model,
+          provider,
+          model,
           connection_id: effectiveDb,
-          connection_ids: selectedDbs.length > 0 ? selectedDbs : [effectiveDb]
-        }),
-      });
-
-      let data;
-      try {
-        data = await response.json();
-      } catch (err) {
-        data = { content: `Error ${response.status}: ${await response.text().catch(() => response.statusText)}` };
-      }
-      
-      if (!response.ok && !data.content) {
-         data.content = data.detail || `Server error ${response.status}`;
-      }
-
-      const assistantMsg: Message = {
-        id: (messages[userMsgIndex + 1]?.id || Date.now().toString() + "-assistant"),
-        role: "assistant",
-        content: data.content,
-        sql: data.sql,
-        generated_query: data.generated_query,
-        query_type: data.query_type,
-        tableData: data.tableData,
-        visualization: data.visualization,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      };
-
-      const currentIdx = updatedUserMsg.currentVersionIndex!;
-      (updatedUserMsg.versions![currentIdx] as any).response = {
-        content: assistantMsg.content,
-        sql: assistantMsg.sql,
-        generated_query: assistantMsg.generated_query,
-        query_type: assistantMsg.query_type,
-        tableData: assistantMsg.tableData,
-        visualization: assistantMsg.visualization,
-        timestamp: assistantMsg.timestamp
-      };
-
-      const finalMessages = [...baseMessages, updatedUserMsg, assistantMsg];
-
-      setMessages(finalMessages);
-      fetchSuggestions(finalMessages);
-
-      setHistory(hPrev => hPrev.map(h =>
-        h.id === currentSessionId ? { ...h, messages: finalMessages } : h
-      ));
+          connection_ids: selectedDbs.length > 0 ? selectedDbs : [effectiveDb],
+          org_id: activeOrgId,
+        },
+        {
+          onSql: (evt) => {
+            finalSql = evt.sql ?? undefined;
+            finalMql = evt.mql ?? undefined;
+            finalVisualization = evt.visualization ?? null;
+            finalTimestamp = evt.timestamp ?? finalTimestamp;
+            const queryText = finalSql || finalMql;
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantMsgId
+                  ? {
+                      ...m,
+                      sql: finalSql,
+                      mql: finalMql,
+                      generated_query: queryText,
+                      timestamp: finalTimestamp,
+                    }
+                  : m
+              )
+            );
+          },
+          onTable: (evt) => {
+            finalTableData = { headers: evt.headers, rows: evt.rows };
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantMsgId
+                  ? { ...m, tableData: finalTableData, visualization: finalVisualization }
+                  : m
+              )
+            );
+          },
+          onResults: (results) => {
+            finalResults = results;
+            if (results.length === 1) {
+              finalTableData = { headers: results[0].headers, rows: results[0].rows };
+            }
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantMsgId
+                  ? {
+                      ...m,
+                      results,
+                      tableData: finalTableData || (results[0]
+                        ? { headers: results[0].headers, rows: results[0].rows }
+                        : undefined),
+                    }
+                  : m
+              )
+            );
+          },
+          onContent: (token) => {
+            accContent += token;
+            setMessages((prev) =>
+              prev.map((m) => (m.id === assistantMsgId ? { ...m, content: accContent } : m))
+            );
+          },
+          onDone: () => {
+            const queryText = finalSql || finalMql;
+            setMessages((prev) => {
+              const existing = prev.find((m) => m.id === assistantMsgId);
+              const content = accContent || existing?.content || "";
+              const assistantMsg: Message = {
+                id: assistantMsgId,
+                role: "assistant",
+                content,
+                sql: finalSql ?? existing?.sql,
+                mql: finalMql ?? existing?.mql,
+                generated_query: queryText || existing?.generated_query,
+                tableData: finalTableData,
+                results: finalResults,
+                visualization: finalVisualization,
+                timestamp: finalTimestamp || existing?.timestamp || "",
+              };
+              const currentIdx = updatedUserMsg.currentVersionIndex!;
+              (updatedUserMsg.versions![currentIdx] as any).response = {
+                content: assistantMsg.content,
+                sql: assistantMsg.sql,
+                mql: assistantMsg.mql,
+                generated_query: assistantMsg.generated_query,
+                tableData: assistantMsg.tableData,
+                results: assistantMsg.results,
+                visualization: assistantMsg.visualization,
+                timestamp: assistantMsg.timestamp,
+              };
+              const finalMessages = [...baseMessages, updatedUserMsg, assistantMsg];
+              fetchSuggestions(finalMessages);
+              setHistory((hPrev) =>
+                hPrev.map((h) =>
+                  h.id === currentSessionId ? { ...h, messages: finalMessages, updatedAt: Date.now() } : h
+                )
+              );
+              return finalMessages;
+            });
+          },
+          onPendingApproval: (evt) => {
+            const op = (evt.operation || "write").toUpperCase();
+            const pendingText = `**${op}** query requires approval before it runs against the database.`;
+            if (evt.query && !finalSql && !finalMql) finalSql = evt.query;
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantMsgId
+                  ? {
+                      ...m,
+                      content: pendingText,
+                      sql: finalSql,
+                      generated_query: evt.query || finalSql || finalMql,
+                      approval: {
+                        id: evt.approval_id,
+                        status: "pending",
+                        operation: evt.operation,
+                        connection_id: evt.connection_id,
+                        database: evt.database,
+                        query: evt.query || finalSql,
+                        original_prompt: evt.original_prompt,
+                        risk_level: evt.risk_level,
+                        reason: evt.reason,
+                      },
+                    }
+                  : m
+              )
+            );
+          },
+          onError: (message) => {
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantMsgId ? { ...m, content: `Error: ${message}` } : m
+              )
+            );
+            toast.error(message);
+          },
+        }
+      );
     } catch (error) {
       console.error("Edit failed:", error);
       setMessages(messages);
@@ -1179,12 +1307,58 @@ export default function ChatPage() {
   };
 
   useEffect(() => {
-    const savedHistory = localStorage.getItem("chat_sessions");
-    const savedCurrentId = localStorage.getItem("current_session_id");
+    const loadHistory = async () => {
+      const savedCurrentId =
+        localStorage.getItem("current_session_id") ||
+        localStorage.getItem("insight_current_session_id");
 
-    if (savedHistory) {
+      const normalize = (s: any) => ({
+        id: s.id,
+        title: s.title || "Untitled",
+        active: s.id === savedCurrentId,
+        messages: (s.messages || []).map((m: any) => ({
+          ...m,
+          sql: m.sql || m.sql_query,
+          tableData: m.tableData,
+        })),
+        isFavorite: Boolean(s.isFavorite ?? s.is_favorite),
+        updatedAt: s.updatedAt ?? s.updated_at ?? Date.now(),
+      });
+
       try {
-        const parsedHistory = JSON.parse(savedHistory);
+        let remote = await api.history.list(activeOrgId);
+        if (!Array.isArray(remote)) remote = [];
+
+        // One-time migration: local → backend when backend empty
+        const migrated = localStorage.getItem("chat_sessions_migrated");
+        const localRaw = localStorage.getItem("chat_sessions");
+        if (!migrated && remote.length === 0 && localRaw) {
+          try {
+            const localSessions = JSON.parse(localRaw);
+            if (Array.isArray(localSessions) && localSessions.length > 0) {
+              for (const s of localSessions) {
+                await api.history.upsert(s.id, {
+                  title: s.title || "Untitled",
+                  isFavorite: !!s.isFavorite,
+                  updatedAt: s.updatedAt || Date.now(),
+                  org_id: activeOrgId,
+                  messages: s.messages || [],
+                }).catch(() => null);
+              }
+              localStorage.setItem("chat_sessions_migrated", "1");
+              localStorage.removeItem("chat_sessions");
+              remote = await api.history.list(activeOrgId);
+              if (!Array.isArray(remote)) remote = [];
+            }
+          } catch (e) {
+            console.error("Chat session migration failed", e);
+          }
+        } else if (localRaw && remote.length > 0 && !migrated) {
+          localStorage.setItem("chat_sessions_migrated", "1");
+          localStorage.removeItem("chat_sessions");
+        }
+
+        const parsedHistory = remote.map(normalize);
         setHistory(parsedHistory);
 
         if (savedCurrentId) {
@@ -1200,19 +1374,33 @@ export default function ChatPage() {
           fetchSuggestions([]);
         }
       } catch (e) {
-        console.error("Error parsing saved history", e);
+        console.error("Error loading history", e);
         fetchSuggestions([]);
       }
-    } else {
-      fetchSuggestions([]);
-    }
-  }, []);
+    };
+    loadHistory();
+  }, [activeOrgId]);
 
+  // Persist sessions to backend (debounced via effect)
   useEffect(() => {
-    if (history.length > 0) {
-      localStorage.setItem("chat_sessions", JSON.stringify(history));
+    if (!history.length) return;
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    for (const session of history) {
+      const t = setTimeout(() => {
+        api.history
+          .upsert(session.id, {
+            title: session.title || "Untitled",
+            isFavorite: !!session.isFavorite,
+            updatedAt: session.updatedAt || Date.now(),
+            org_id: activeOrgId,
+            messages: session.messages || [],
+          })
+          .catch((err) => console.warn("Failed to persist session", err));
+      }, 400);
+      timers.push(t);
     }
-  }, [history]);
+    return () => timers.forEach(clearTimeout);
+  }, [history, activeOrgId]);
 
   useEffect(() => {
     if (currentSessionId) {
@@ -1250,28 +1438,33 @@ export default function ChatPage() {
     }
   };
 
-  const deleteSession = (e: React.MouseEvent, sessionId: string) => {
+  const deleteSession = async (e: React.MouseEvent, sessionId: string) => {
     e.stopPropagation();
-    const newHistory = history.filter(h => h.id !== sessionId);
+    const newHistory = history.filter((h) => h.id !== sessionId);
     setHistory(newHistory);
     if (currentSessionId === sessionId) {
       setMessages([]);
       setCurrentSessionId(null);
       setSuggestions([]);
     }
+    try {
+      await api.history.delete(sessionId);
+    } catch (err) {
+      console.warn("Failed to delete session remotely", err);
+    }
   };
 
   const toggleFavoriteSession = (e: React.MouseEvent, sessionId: string) => {
     e.stopPropagation();
-    const newHistory = history.map(h =>
-      h.id === sessionId ? { ...h, isFavorite: !h.isFavorite } : h
+    const newHistory = history.map((h) =>
+      h.id === sessionId ? { ...h, isFavorite: !h.isFavorite, updatedAt: Date.now() } : h
     );
     setHistory(newHistory);
   };
 
   const getCanonicalMsgId = (msg: Message) => {
     if (msg.role === "user") return msg.id;
-    const idx = messages.findIndex(m => m.id === msg.id);
+    const idx = messages.findIndex((m) => m.id === msg.id);
     if (idx > 0 && messages[idx - 1].role === "user") {
       return messages[idx - 1].id;
     }
@@ -1283,61 +1476,70 @@ export default function ChatPage() {
     return savedQueryIds.has(canonicalId);
   };
 
-  const toggleFavoriteMessage = (msg: Message) => {
+  const toggleFavoriteMessage = async (msg: Message) => {
     const canonicalId = getCanonicalMsgId(msg);
-    const savedFavs = localStorage.getItem("favorite_queries");
-    let favs = savedFavs ? JSON.parse(savedFavs) : [];
-    const isAlreadyFav = favs.some((f: any) => f.id === canonicalId);
+    const isAlreadyFav = savedQueryIds.has(canonicalId);
 
-    let updatedFavs;
     if (isAlreadyFav) {
-      updatedFavs = favs.filter((f: any) => f.id !== canonicalId);
-      setSavedQueryIds(prev => {
+      setSavedQueryIds((prev) => {
         const next = new Set(prev);
         next.delete(canonicalId);
         return next;
       });
-    } else {
-      // Find the user message and assistant message
-      let userMsg = msg;
-      let assistantMsg = msg;
-      const idx = messages.findIndex(m => m.id === msg.id);
-
-      if (msg.role === "user") {
-        userMsg = msg;
-        if (idx >= 0 && idx + 1 < messages.length) {
-          assistantMsg = messages[idx + 1];
-        }
-      } else {
-        if (idx > 0) {
-          userMsg = messages[idx - 1];
-        }
-        assistantMsg = msg;
+      try {
+        await api.savedQueries.delete(canonicalId);
+      } catch (e) {
+        console.warn("Failed to delete saved query", e);
       }
-
-      const dbName = databases.find(db => db.id === selectedDb)?.name || "PostgreSQL";
-
-      favs.push({
-        id: canonicalId,
-        question: userMsg.content,
-        answer: assistantMsg?.content || "",
-        sql: assistantMsg?.sql || "",
-        tableData: assistantMsg?.tableData || null,
-        timestamp: userMsg.timestamp || Date.now(),
-        sessionId: currentSessionId,
-        database: dbName,
-        connection_id: selectedDb
-      });
-      updatedFavs = favs;
-      setSavedQueryIds(prev => {
-        const next = new Set(prev);
-        next.add(canonicalId);
-        return next;
-      });
+      setMessages([...messages]);
+      return;
     }
 
-    localStorage.setItem("favorite_queries", JSON.stringify(updatedFavs));
+    let userMsg = msg;
+    let assistantMsg = msg;
+    const idx = messages.findIndex((m) => m.id === msg.id);
+
+    if (msg.role === "user") {
+      userMsg = msg;
+      if (idx >= 0 && idx + 1 < messages.length) {
+        assistantMsg = messages[idx + 1];
+      }
+    } else {
+      if (idx > 0) {
+        userMsg = messages[idx - 1];
+      }
+      assistantMsg = msg;
+    }
+
+    const dbName = databases.find((db) => db.id === selectedDb)?.name || "PostgreSQL";
+
+    const payload = {
+      id: canonicalId,
+      question: userMsg.content,
+      answer: assistantMsg?.content || "",
+      sql: assistantMsg?.sql || "",
+      tableData: assistantMsg?.tableData || null,
+      saved_at: Date.now(),
+      sessionId: currentSessionId,
+      database: dbName,
+      connection_id: selectedDb,
+      org_id: activeOrgId,
+    };
+
+    setSavedQueryIds((prev) => {
+      const next = new Set(prev);
+      next.add(canonicalId);
+      return next;
+    });
     setMessages([...messages]);
+
+    try {
+      await api.savedQueries.save(payload);
+      toast.success("Saved query");
+    } catch (e) {
+      console.warn("Failed to save query", e);
+      toast.error("Failed to save query");
+    }
   };
 
   const handleToggleSave = (msg: Message) => {
@@ -1353,8 +1555,7 @@ export default function ChatPage() {
 
   const fetchDatabases = async () => {
     try {
-      const response = await fetch("/api/backend/databases");
-      const data = await response.json().catch(() => ({}));
+      const data = await api.databases.list(activeOrgId);
       if (Array.isArray(data)) {
         setDatabases(data);
         const connectedDbs = data.filter((db: any) => db.is_default);
@@ -1373,26 +1574,25 @@ export default function ChatPage() {
 
   useEffect(() => {
     fetchDatabases();
-    try {
-      const savedProjects = localStorage.getItem("insight_projects");
-      if (savedProjects) {
-        const parsed = JSON.parse(savedProjects);
-        setProjects(parsed);
-        setSelectedProject("");
-      }
-    } catch (error) {
-      console.error("Error reading projects in chat mount:", error);
-    }
-    try {
-      const saved = localStorage.getItem("favorite_queries");
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        setSavedQueryIds(new Set(parsed.map((item: any) => item.id)));
-      }
-    } catch (e) {
-      console.error("Error loading saved queries in chat mount:", e);
-    }
-  }, []);
+    api.projects
+      .list(activeOrgId)
+      .then((data) => {
+        if (Array.isArray(data)) {
+          setProjects(data);
+          setSelectedProject("");
+        }
+      })
+      .catch((error) => console.error("Error reading projects in chat mount:", error));
+
+    api.savedQueries
+      .list(activeOrgId)
+      .then((data) => {
+        if (Array.isArray(data)) {
+          setSavedQueryIds(new Set(data.map((item: any) => item.id)));
+        }
+      })
+      .catch((e) => console.error("Error loading saved queries in chat mount:", e));
+  }, [activeOrgId]);
 
   // Sync selectedDb whenever selectedProject, databases, or projects update
   useEffect(() => {
@@ -1695,7 +1895,12 @@ export default function ChatPage() {
     setIsTyping(true);
 
     try {
-      if (input.trim() === "/dashboard") {
+      // Dashboard generation: /dashboard or natural-language "dashboard" requests
+      const wantsDashboard =
+        input.trim() === "/dashboard" ||
+        /\bdashboards?\b/i.test(input.trim());
+
+      if (wantsDashboard) {
         const response = await fetch("/api/backend/dashboard-generate", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -1705,7 +1910,8 @@ export default function ChatPage() {
             provider: provider,
             model: model,
             connection_id: effectiveDb,
-            connection_ids: selectedDbs.length > 0 ? selectedDbs : [effectiveDb]
+            connection_ids: selectedDbs.length > 0 ? selectedDbs : [effectiveDb],
+            org_id: activeOrgId,
           }),
         });
 
@@ -1715,8 +1921,8 @@ export default function ChatPage() {
         const dashboardMsg: Message = {
           id: Date.now().toString() + "-dashboard",
           role: "assistant",
-          content: "Here is your generated Auto-Dashboard based on the database schema:",
-          dashboardWidgets: data.widgets,
+          content: "Here is your generated dashboard. Use Save dashboard to keep it under Dashboards.",
+          dashboardWidgets: data.widgets || [],
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         };
 
@@ -1745,6 +1951,7 @@ export default function ChatPage() {
           model,
           connection_id: effectiveDb,
           connection_ids: selectedDbs.length > 0 ? selectedDbs : [effectiveDb],
+          org_id: activeOrgId,
         }),
       });
 
@@ -1758,7 +1965,9 @@ export default function ChatPage() {
       let buffer = "";
       let accContent = "";
       let finalSql: string | undefined;
+      let finalMql: string | undefined;
       let finalTableData: any;
+      let finalResults: AskResultSource[] | undefined;
       let finalVisualization: string | null = null;
       let finalTimestamp = assistantPlaceholder.timestamp;
 
@@ -1778,20 +1987,100 @@ export default function ChatPage() {
             const evt = JSON.parse(line.slice(6));
 
             if (evt.type === "sql") {
-              finalSql = evt.sql;
+              finalSql = evt.sql ?? undefined;
+              finalMql = evt.mql ?? undefined;
               finalVisualization = evt.visualization ?? null;
               finalTimestamp = evt.timestamp ?? finalTimestamp;
+              const queryText = finalSql || finalMql;
               setMessages((prev) =>
                 prev.map((m) =>
-                  m.id === assistantMsgId ? { ...m, sql: evt.sql, generated_query: evt.sql, timestamp: finalTimestamp } : m
+                  m.id === assistantMsgId
+                    ? {
+                        ...m,
+                        sql: finalSql,
+                        mql: finalMql,
+                        generated_query: queryText,
+                        timestamp: finalTimestamp,
+                      }
+                    : m
+                )
+              );
+            } else if (evt.type === "results") {
+              const incomingResults: AskResultSource[] = evt.results || [];
+              finalResults = incomingResults;
+              if (incomingResults.length === 1) {
+                finalTableData = { headers: incomingResults[0].headers, rows: incomingResults[0].rows };
+              } else if (incomingResults.length > 1 && !finalTableData) {
+                finalTableData = {
+                  headers: incomingResults[0].headers,
+                  rows: incomingResults[0].rows,
+                };
+              }
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantMsgId
+                    ? { ...m, results: incomingResults, tableData: finalTableData, visualization: finalVisualization }
+                    : m
                 )
               );
             } else if (evt.type === "table") {
               finalTableData = { headers: evt.headers, rows: evt.rows };
+              // If backend includes connection metadata on table events, accumulate sources
+              if (evt.connection_id || evt.database) {
+                const source: AskResultSource = {
+                  connection_id: evt.connection_id,
+                  database: evt.database,
+                  headers: evt.headers,
+                  rows: evt.rows,
+                  query: evt.query,
+                  dialect: evt.dialect,
+                };
+                finalResults = [...(finalResults || []).filter(
+                  (r) => r.connection_id !== source.connection_id || r.database !== source.database
+                ), source];
+              }
               setMessages((prev) =>
                 prev.map((m) =>
                   m.id === assistantMsgId
-                    ? { ...m, tableData: finalTableData, visualization: finalVisualization }
+                    ? {
+                        ...m,
+                        tableData: finalTableData,
+                        results: finalResults,
+                        visualization: finalVisualization,
+                      }
+                    : m
+                )
+              );
+            } else if (evt.type === "pending_approval") {
+              const op = (evt.operation || "write").toUpperCase();
+              const pendingText = `**${op}** query requires approval before it runs against the database.`;
+              const queryText = evt.query || finalSql || finalMql;
+              if (evt.query && !finalSql && !finalMql) {
+                finalSql = evt.query;
+              }
+              setIsTyping(false);
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantMsgId
+                    ? {
+                        ...m,
+                        content: pendingText,
+                        sql: finalSql || (queryText && !finalMql ? queryText : undefined),
+                        mql: finalMql,
+                        generated_query: queryText,
+                        timestamp: evt.timestamp || m.timestamp,
+                        approval: {
+                          id: evt.approval_id,
+                          status: "pending",
+                          operation: evt.operation,
+                          connection_id: evt.connection_id,
+                          database: evt.database,
+                          query: evt.query || queryText,
+                          original_prompt: evt.original_prompt,
+                          risk_level: evt.risk_level,
+                          reason: evt.reason,
+                        },
+                      }
                     : m
                 )
               );
@@ -1803,40 +2092,52 @@ export default function ChatPage() {
                 )
               );
             } else if (evt.type === "done") {
-              // final assembled message
-              const finalMsg: Message = {
-                id: assistantMsgId,
-                role: "assistant",
-                content: accContent,
-                sql: finalSql,
-                generated_query: finalSql,
-                tableData: finalTableData,
-                visualization: finalVisualization,
-                timestamp: finalTimestamp,
-              };
+              // final assembled message (preserve pending-approval text if no synthesis streamed)
+              const queryText = finalSql || finalMql;
               setMessages((prev) => {
+                const existing = prev.find((m) => m.id === assistantMsgId);
+                const content = accContent || existing?.content || "";
+                const finalMsg: Message = {
+                  id: assistantMsgId,
+                  role: "assistant",
+                  content,
+                  sql: finalSql ?? existing?.sql,
+                  mql: finalMql ?? existing?.mql,
+                  generated_query: queryText || existing?.generated_query,
+                  tableData: finalTableData,
+                  results: finalResults,
+                  visualization: finalVisualization,
+                  approval: existing?.approval,
+                  timestamp: finalTimestamp || existing?.timestamp || "",
+                };
                 const updated = prev.map((m) => (m.id === assistantMsgId ? finalMsg : m));
                 fetchSuggestions(updated);
-                // Auto-summarize on first exchange
                 if (updated.length === 2) {
-                  fetch("/api/backend/summarize", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ question: input, response: accContent, provider, model }),
-                  })
-                    .then((r) => r.json().catch(() => ({})))
+                  api.summarize({ question: input, response: content, provider, model })
                     .then(({ title }) => {
                       if (title) setHistory((h) => h.map((s) => (s.id === updatedSessionId ? { ...s, title } : s)));
                     })
                     .catch(() => {});
                 }
-                setHistory((h) => h.map((s) => (s.id === updatedSessionId ? { ...s, messages: updated } : s)));
+                setHistory((h) => h.map((s) => (s.id === updatedSessionId ? { ...s, messages: updated, updatedAt: Date.now() } : s)));
                 return updated;
               });
             } else if (evt.type === "error") {
-              throw new Error(evt.data);
+              const errText = evt.data || "Query failed.";
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === assistantMsgId
+                    ? { ...m, content: `Error: ${errText}` }
+                    : m
+                )
+              );
+              toast.error(errText);
+              return;
             }
           } catch (parseErr) {
+            if (parseErr instanceof Error && parseErr.message && !parseErr.message.includes("JSON")) {
+              throw parseErr;
+            }
             // skip malformed SSE line
           }
         }
@@ -1844,15 +2145,115 @@ export default function ChatPage() {
     } catch (error) {
       const errText = error instanceof Error ? error.message : "Could not connect to backend. Make sure it's running.";
       toast.error(errText);
-      const errorMsg: Message = {
-        id: (Date.now() + 1).toString(),
-        role: "assistant",
-        content: `Error: ${errText}`,
-        timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-      };
-      setMessages((prev) => [...prev, errorMsg]);
+      setMessages((prev) => {
+        const hasPlaceholder = prev.some((m) => m.id === assistantMsgId);
+        if (hasPlaceholder) {
+          return prev.map((m) =>
+            m.id === assistantMsgId
+              ? { ...m, content: `Error: ${errText}` }
+              : m
+          );
+        }
+        return [
+          ...prev,
+          {
+            id: (Date.now() + 1).toString(),
+            role: "assistant" as const,
+            content: `Error: ${errText}`,
+            timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+          },
+        ];
+      });
     } finally {
       setIsTyping(false);
+    }
+  };
+
+  const handleApprovalAction = async (
+    messageId: string,
+    approvalId: string,
+    action: "approve" | "reject"
+  ) => {
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.id === messageId && m.approval
+          ? { ...m, approval: { ...m.approval, busy: true } }
+          : m
+      )
+    );
+    try {
+      if (action === "approve") {
+        const result = await api.approvals.approve(approvalId);
+        const exec = result?.execution;
+        const headers = exec?.headers;
+        const rows = exec?.rows;
+        const successText =
+          result?.message ||
+          "Query approved and executed successfully. The change is now in the database.";
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === messageId
+              ? {
+                  ...m,
+                  content: `✅ **Query Approved**\n\n${successText}`,
+                  approval: {
+                    ...(m.approval || { id: approvalId, status: "approved" as const }),
+                    id: approvalId,
+                    status: "approved",
+                    busy: false,
+                    error: undefined,
+                  },
+                  tableData:
+                    Array.isArray(headers) && Array.isArray(rows)
+                      ? { headers, rows }
+                      : {
+                          headers: ["Status"],
+                          rows: [["Success — applied to database"]],
+                        },
+                }
+              : m
+          )
+        );
+        toast.success("Approved and executed successfully");
+        void refreshPendingApprovals();
+      } else {
+        await api.approvals.reject(approvalId);
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === messageId
+              ? {
+                  ...m,
+                  content: "❌ **Query Rejected**\n\nThe SQL statement was not executed.",
+                  approval: {
+                    ...(m.approval || { id: approvalId, status: "rejected" as const }),
+                    id: approvalId,
+                    status: "rejected",
+                    busy: false,
+                  },
+                }
+              : m
+          )
+        );
+        toast.message("Approval rejected");
+        void refreshPendingApprovals();
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : `Failed to ${action}`;
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === messageId && m.approval
+            ? {
+                ...m,
+                content:
+                  action === "approve"
+                    ? `❌ **Query Approved**\n\nExecution Failed\n\nReason:\n${msg}`
+                    : `Approval ${action} failed: ${msg}`,
+                approval: { ...m.approval, status: "failed", busy: false, error: msg },
+              }
+            : m
+        )
+      );
+      toast.error(msg);
     }
   };
 
@@ -1870,27 +2271,42 @@ export default function ChatPage() {
     }
   };
 
-  // Dynamic Results Logic for Right Panel
-  const resultsData = (() => {
-    if (activeResult?.results) {
-      return activeResult.results;
+  // Dynamic Results Logic for Right Panel — prefer per-source tabs when results[] present
+  const sourceResults: AskResultSource[] | null = (() => {
+    if (Array.isArray(activeResult?.results) && activeResult.results.length > 0) {
+      const first = activeResult.results[0];
+      if (first && Array.isArray(first.headers) && Array.isArray(first.rows)) {
+        return activeResult.results as AskResultSource[];
+      }
     }
-    if (activeResult?.tableData && Array.isArray(activeResult.tableData.headers) && Array.isArray(activeResult.tableData.rows)) {
-      const headers = activeResult.tableData.headers;
-      return activeResult.tableData.rows.map((row: any[]) => {
+    return null;
+  })();
+
+  const activeSourceTable = (() => {
+    if (sourceResults && sourceResults.length > 0) {
+      const src = sourceResults[Math.min(activeSourceIdx, sourceResults.length - 1)];
+      return { headers: src.headers, rows: src.rows, database: src.database, query: src.query };
+    }
+    if (activeResult?.tableData) return activeResult.tableData;
+    return null;
+  })();
+
+  const resultsData = (() => {
+    if (activeSourceTable && Array.isArray(activeSourceTable.headers) && Array.isArray(activeSourceTable.rows)) {
+      const headers = activeSourceTable.headers;
+      return activeSourceTable.rows.map((row: any[]) => {
         const obj: any = {};
         headers.forEach((header: string, idx: number) => {
           const val = row[idx];
-          if (typeof val === 'string' && val.trim().startsWith('{')) {
+          if (typeof val === "string" && val.trim().startsWith("{")) {
             try {
               const parsed = JSON.parse(val);
-              if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
-                // Flatten the JSON object into the row
+              if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
                 Object.assign(obj, parsed);
-                return; // Skip adding the raw JSON string column
+                return;
               }
-            } catch(e) {
-              // Not valid JSON object, fall through
+            } catch (e) {
+              // fall through
             }
           }
           obj[header] = val;
@@ -1903,10 +2319,10 @@ export default function ChatPage() {
   const isResultsArray = Array.isArray(resultsData);
   const hasResults = isResultsArray && resultsData.length > 0;
   const firstRow = hasResults ? resultsData[0] : null;
-  const isObjectRow = firstRow !== null && typeof firstRow === 'object' && !Array.isArray(firstRow);
-  const resultColumns = isObjectRow ? Object.keys(firstRow) : [];
-  const useBullets = hasResults && (!isObjectRow || resultColumns.length === 1);
-  const useStatsCard = hasResults && isObjectRow && resultColumns.length === 1 && resultsData.length === 1;
+  const isObjectProp = firstRow !== null && typeof firstRow === "object" && !Array.isArray(firstRow);
+  const resultColumns = isObjectProp ? Object.keys(firstRow) : [];
+  const useBullets = hasResults && (!isObjectProp || resultColumns.length === 1);
+  const useStatsCard = hasResults && isObjectProp && resultColumns.length === 1 && resultsData.length === 1;
 
   return (
     <div className="h-full flex overflow-hidden relative">
@@ -2327,7 +2743,13 @@ export default function ChatPage() {
                     </div>
                   )}
 
-                  <div className={`max-w-[80%] space-y-3 ${msg.role === "user" ? "items-end" : "items-start"} min-w-0`}>
+                  <div className={`${msg.dashboardWidgets?.length ? "max-w-full flex-1" : "max-w-[80%]"} space-y-3 ${msg.role === "user" ? "items-end" : "items-start"} min-w-0`}>
+                    {/* Text/status bubble — skip empty assistant shells (avatar + results only) */}
+                    {(msg.role === "user" ||
+                      (msg.content && msg.content.trim().length > 0) ||
+                      (msg.role === "assistant" && msg.content === "" && isTyping && msg === messages[messages.length - 1]) ||
+                      editingMessageId === msg.id ||
+                      msg.attachmentUrl) && (
                     <div
                       className={`relative rounded-2xl px-4 py-3 ${msg.role === "user"
                         ? "bg-gradient-to-br from-indigo-500 to-indigo-600 dark:from-indigo-600 dark:to-indigo-700 text-white rounded-tr-md ml-auto shadow-md shadow-indigo-500/30 border border-indigo-400/20"
@@ -2376,17 +2798,46 @@ export default function ChatPage() {
                               <span className="h-2 w-2 rounded-full bg-indigo-500 typing-dot" />
                               <span className="h-2 w-2 rounded-full bg-indigo-500 typing-dot" />
                             </div>
-                          ) : (
+                          ) : msg.content?.trim() ? (
+                            <>
                             <div className={`text-sm leading-relaxed prose dark:prose-invert max-w-none ${msg.role === "user" ? "!text-white font-medium" : "text-slate-800 dark:text-slate-200"} ${msg.role === "assistant" && isTyping && msg === messages[messages.length - 1] ? "streaming-cursor" : ""}`}>
                               <ReactMarkdown>{msg.content}</ReactMarkdown>
                             </div>
-                          )}
-                          {msg.dashboardWidgets && (
-                            <AutoDashboard widgets={msg.dashboardWidgets} />
-                          )}
+                            {msg.approval && (
+                              <ChatApprovalCard
+                                approval={{
+                                  ...msg.approval,
+                                  query:
+                                    msg.approval.query ||
+                                    msg.generated_query ||
+                                    msg.sql ||
+                                    msg.mql,
+                                }}
+                                canApprove={canManage}
+                                onApprove={() =>
+                                  void handleApprovalAction(msg.id, msg.approval!.id, "approve")
+                                }
+                                onReject={() =>
+                                  void handleApprovalAction(msg.id, msg.approval!.id, "reject")
+                                }
+                              />
+                            )}
+                            </>
+                          ) : null}
                         </div>
                       )}
                     </div>
+                    )}
+
+                    {/* Dashboard widgets render outside the text bubble */}
+                    {msg.dashboardWidgets && msg.dashboardWidgets.length > 0 && (
+                      <AutoDashboard
+                        widgets={msg.dashboardWidgets}
+                        title={msg.content?.trim() ? "Auto Dashboard" : "Saved-ready dashboard"}
+                        connectionId={selectedDb}
+                        orgId={activeOrgId}
+                      />
+                    )}
 
                     <div className={`flex items-center gap-3 opacity-0 group-hover/msg:opacity-100 transition-opacity duration-200 px-1 ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
                       {msg.versions && msg.versions.length > 1 && (
@@ -2446,7 +2897,7 @@ export default function ChatPage() {
                       </div>
                     </div>
 
-                    {(msg.generated_query || msg.sql) && showSQL && (
+                    {(msg.generated_query || msg.sql || msg.mql) && showSQL && (
                       <motion.div
                         initial={{ opacity: 0, height: 0 }}
                         animate={{ opacity: 1, height: "auto" }}
@@ -2486,7 +2937,7 @@ export default function ChatPage() {
                               size="sm"
                               className="h-7 text-[10px] gap-1.5 px-2 hover:bg-background"
                               onClick={() => {
-                                const q = msg.generated_query || msg.sql;
+                                const q = msg.generated_query || msg.sql || msg.mql;
                                 if (q) navigator.clipboard.writeText(q);
                               }}
                             >
@@ -2553,13 +3004,13 @@ export default function ChatPage() {
                               variant="outline" 
                               size="sm" 
                               className="absolute top-6 right-6 gap-2 bg-background/80 backdrop-blur-sm shadow-sm"
-                              onClick={() => handleAnalyzePerformance(msg.generated_query || msg.sql || "")}
+                              onClick={() => handleAnalyzePerformance(msg.generated_query || msg.sql || msg.mql || "")}
                             >
                               <Activity className="h-4 w-4 text-blue-500" />
                               Analyze Performance
                             </Button>
                             <pre className="text-xs font-mono bg-muted dark:bg-[#0d0d14] text-emerald-600 dark:text-emerald-400 border border-border rounded-lg p-4 overflow-x-auto leading-relaxed">
-                              <code>{msg.generated_query || msg.sql}</code>
+                              <code>{msg.generated_query || msg.sql || msg.mql}</code>
                             </pre>
                           </TabsContent>
                         </Tabs>
@@ -2791,6 +3242,39 @@ export default function ChatPage() {
               </div>
             </div>
 
+            {/* Query templates (filtered by db type) */}
+            {messages.length === 0 && (() => {
+              const dbType = databases.find((d) => d.id === selectedDb)?.type;
+              const templates = templatesForDbType(dbType);
+              if (!templates.length) return null;
+              return (
+                <div className="flex flex-wrap gap-2 justify-center mb-2">
+                  {templates.slice(0, 6).map((t) => (
+                    <button
+                      key={t.id}
+                      type="button"
+                      onClick={() => {
+                        setInput(t.prompt);
+                        textareaRef.current?.focus();
+                      }}
+                      className="px-3 py-1.5 rounded-full bg-indigo-500/10 border border-indigo-500/25 text-[11px] font-semibold text-indigo-300 hover:bg-indigo-500/20 transition-all"
+                    >
+                      {t.label}
+                    </button>
+                  ))}
+                  {selectedDb && (
+                    <Link
+                      href={`/dashboard/schema?db=${selectedDb}`}
+                      className="px-3 py-1.5 rounded-full bg-slate-800/60 border border-slate-700 text-[11px] font-semibold text-slate-300 hover:border-indigo-500/40 transition-all inline-flex items-center gap-1.5"
+                    >
+                      <Database className="h-3 w-3" />
+                      Explore schema
+                    </Link>
+                  )}
+                </div>
+              );
+            })()}
+
             {/* Suggestions */}
             {suggestions.length > 0 && (
               <div className="flex flex-wrap gap-2 animate-in fade-in slide-in-from-bottom-2 duration-500 delay-150 justify-center">
@@ -2856,6 +3340,24 @@ export default function ChatPage() {
               </div>
 
               {/* ──────────── Enterprise Dynamic Results Dashboard ──────────── */}
+              {sourceResults && sourceResults.length > 1 && (
+                <div className="flex flex-wrap gap-2 -mt-2">
+                  {sourceResults.map((src, idx) => (
+                    <button
+                      key={`${src.connection_id || src.database || "src"}-${idx}`}
+                      type="button"
+                      onClick={() => setActiveSourceIdx(idx)}
+                      className={`px-3 py-1.5 rounded-lg text-[11px] font-bold border transition-all ${
+                        activeSourceIdx === idx
+                          ? "bg-indigo-500/20 border-indigo-500/40 text-indigo-300"
+                          : "bg-slate-900/40 border-slate-800 text-slate-400 hover:border-slate-600"
+                      }`}
+                    >
+                      {src.database || src.connection_id || `Source ${idx + 1}`}
+                    </button>
+                  ))}
+                </div>
+              )}
               {(() => {
                 if (!hasResults) {
                   return (
@@ -3015,11 +3517,11 @@ export default function ChatPage() {
                             Export
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end" className="w-48 bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 text-slate-900 dark:text-white shadow-2xl rounded-xl z-[100] p-1.5">
-                            <DropdownMenuItem onClick={() => { if (activeResult?.tableData) exportToCSV(activeResult.tableData); }} className="cursor-pointer text-xs flex items-center gap-2.5 py-2 px-3 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 focus:bg-slate-100 dark:focus:bg-slate-800">
+                            <DropdownMenuItem onClick={() => { if (activeSourceTable) exportToCSV(activeSourceTable); }} className="cursor-pointer text-xs flex items-center gap-2.5 py-2 px-3 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 focus:bg-slate-100 dark:focus:bg-slate-800">
                               <Download className="h-4 w-4 text-emerald-500" />
                               <span>Export as CSV</span>
                             </DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => { if (activeResult?.tableData) exportToExcel(activeResult.tableData); }} className="cursor-pointer text-xs flex items-center gap-2.5 py-2 px-3 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 focus:bg-slate-100 dark:focus:bg-slate-800">
+                            <DropdownMenuItem onClick={() => { if (activeSourceTable) exportToExcel(activeSourceTable); }} className="cursor-pointer text-xs flex items-center gap-2.5 py-2 px-3 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 focus:bg-slate-100 dark:focus:bg-slate-800">
                               <FileSpreadsheet className="h-4 w-4 text-emerald-400" />
                               <span>Export as Excel</span>
                             </DropdownMenuItem>
@@ -3033,11 +3535,11 @@ export default function ChatPage() {
                               <span>Download JPG Image</span>
                             </DropdownMenuItem>
                             <DropdownMenuSeparator className="bg-slate-200 dark:bg-slate-800/50" />
-                            <DropdownMenuItem onClick={() => { if (activeResult?.tableData) shareToMail(activeResult.tableData); }} className="cursor-pointer text-xs flex items-center gap-2.5 py-2 px-3 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 focus:bg-slate-100 dark:focus:bg-slate-800">
+                            <DropdownMenuItem onClick={() => { if (activeSourceTable) shareToMail(activeSourceTable); }} className="cursor-pointer text-xs flex items-center gap-2.5 py-2 px-3 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 focus:bg-slate-100 dark:focus:bg-slate-800">
                               <Mail className="h-4 w-4 text-amber-400" />
                               <span>Share via Email</span>
                             </DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => { if (activeResult?.tableData) copyData(activeResult.tableData); }} className="cursor-pointer text-xs flex items-center gap-2.5 py-2 px-3 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 focus:bg-slate-100 dark:focus:bg-slate-800">
+                            <DropdownMenuItem onClick={() => { if (activeSourceTable) copyData(activeSourceTable); }} className="cursor-pointer text-xs flex items-center gap-2.5 py-2 px-3 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 focus:bg-slate-100 dark:focus:bg-slate-800">
                               <LinkIcon className="h-4 w-4 text-purple-400" />
                               <span>Copy Raw Data</span>
                             </DropdownMenuItem>
@@ -3226,7 +3728,7 @@ export default function ChatPage() {
                           </button>
                         )}
                         <button
-                          onClick={() => { if (activeResult?.tableData) copyData(activeResult.tableData); }}
+                          onClick={() => { if (activeSourceTable) copyData(activeSourceTable); }}
                           className="inline-flex items-center gap-1.5 text-[11px] font-bold text-slate-400 dark:text-slate-500 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors px-2.5 py-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800/50"
                         >
                           <ClipboardCopy className="h-3.5 w-3.5" />

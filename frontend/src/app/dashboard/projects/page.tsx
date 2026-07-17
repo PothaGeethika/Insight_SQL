@@ -34,6 +34,9 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { useWorkspace } from "@/lib/workspace";
+import { api } from "@/lib/apiClient";
+import { toast } from "sonner";
 
 const MOCK_PROJECTS: any[] = [];
 
@@ -110,11 +113,10 @@ const getDbTypeInfo = (type: string) => {
 };
 
 export default function ProjectsPage() {
+  const { activeOrgId, canEdit } = useWorkspace();
   const [searchQuery, setSearchQuery] = useState("");
   const [projects, setProjects] = useState<any[]>([]);
   const [dbList, setDbList] = useState<any[]>([]);
-  const [orgs, setOrgs] = useState<any[]>([]);
-  const [activeOrgId, setActiveOrgId] = useState<string | null>(null);
   const [workspaceMembers, setWorkspaceMembers] = useState<any[]>([]);
   
   // Sort & Layout states
@@ -174,32 +176,11 @@ export default function ProjectsPage() {
     setShowModal(true);
   };
 
-  // Fetch orgs and set active
-  const fetchOrgs = async () => {
-    try {
-      const res = await fetch("/api/backend/orgs", { credentials: "include" });
-      if (res.ok) {
-        const data = await res.json();
-        setOrgs(data);
-        const personal = data.find((o: any) => o.name === "Personal Workspace");
-        const selectedId = personal ? personal.id : (data[0]?.id || null);
-        setActiveOrgId(selectedId);
-        if (selectedId) {
-          fetchWorkspaceMembers(selectedId);
-        }
-      }
-    } catch (e) {
-      console.error(e);
-    }
-  };
-
+  // Fetch workspace members for active org
   const fetchWorkspaceMembers = async (orgId: string) => {
     try {
-      const res = await fetch(`/api/backend/orgs/${orgId}/members`, { credentials: "include" });
-      if (res.ok) {
-        const data = await res.json();
-        setWorkspaceMembers(data);
-      }
+      const data = await api.orgs.members(orgId);
+      setWorkspaceMembers(Array.isArray(data) ? data : []);
     } catch (e) {
       console.error(e);
     }
@@ -207,29 +188,23 @@ export default function ProjectsPage() {
 
   const fetchProjects = async () => {
     try {
-      const res = await fetch("/api/backend/projects", { credentials: "include" });
-      if (res.ok) {
-        const data = await res.json();
-        setProjects(data);
-      }
+      const data = await api.projects.list(activeOrgId);
+      if (Array.isArray(data)) setProjects(data);
     } catch (e) {
       console.error(e);
     }
   };
 
   useEffect(() => {
-    fetchOrgs();
+    if (activeOrgId) fetchWorkspaceMembers(activeOrgId);
     fetchProjects();
     fetchDatabases();
-  }, []);
+  }, [activeOrgId]);
 
   const fetchDatabases = async () => {
     try {
-      const res = await fetch("/api/backend/databases", { credentials: "include" });
-      if (res.ok) {
-        const data = await res.json();
-        setDbList(data);
-      }
+      const data = await api.databases.list(activeOrgId);
+      if (Array.isArray(data)) setDbList(data);
     } catch (e) {
       console.error("Failed to fetch databases", e);
     }
@@ -250,6 +225,10 @@ export default function ProjectsPage() {
   };
 
   const handleCreateProject = async () => {
+    if (!canEdit) {
+      toast.error("Viewers cannot create or edit projects.");
+      return;
+    }
     if (!newProjectName.trim()) return;
 
     const projectDbs = dbList
@@ -274,28 +253,15 @@ export default function ProjectsPage() {
 
     try {
       if (editingProjectId) {
-        const res = await fetch(`/api/backend/projects/${editingProjectId}`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-          credentials: "include"
-        });
-        if (res.ok) {
-          fetchProjects();
-        }
+        await api.projects.update(editingProjectId, payload);
+        fetchProjects();
       } else {
-        const res = await fetch("/api/backend/projects", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-          credentials: "include"
-        });
-        if (res.ok) {
-          fetchProjects();
-        }
+        await api.projects.create(payload);
+        fetchProjects();
       }
     } catch (e) {
       console.error(e);
+      toast.error("Failed to save project");
     }
 
     setNewProjectName("");
@@ -312,12 +278,7 @@ export default function ProjectsPage() {
     const project = projects.find(p => p.id === projectId);
     if (!project) return;
     try {
-      await fetch(`/api/backend/projects/${projectId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...project, isFavorite: !project.isFavorite }),
-        credentials: "include"
-      });
+      await api.projects.update(projectId, { ...project, isFavorite: !project.isFavorite, org_id: activeOrgId });
       fetchProjects();
     } catch (e) {}
   };
@@ -327,12 +288,7 @@ export default function ProjectsPage() {
     if (!project) return;
     const newStatus = project.status === "Active" ? "Inactive" : "Active";
     try {
-      await fetch(`/api/backend/projects/${projectId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...project, status: newStatus }),
-        credentials: "include"
-      });
+      await api.projects.update(projectId, { ...project, status: newStatus, org_id: activeOrgId });
       fetchProjects();
     } catch (e) {
       console.error("Failed to update status", e);
@@ -340,14 +296,17 @@ export default function ProjectsPage() {
   };
 
   const handleDeleteProject = async (projectId: string) => {
+    if (!canEdit) {
+      toast.error("Viewers cannot delete projects.");
+      return;
+    }
     if (confirm("Are you sure you want to delete this project?")) {
       try {
-        await fetch(`/api/backend/projects/${projectId}`, {
-          method: "DELETE",
-          credentials: "include"
-        });
+        await api.projects.delete(projectId);
         fetchProjects();
-      } catch (e) {}
+      } catch (e) {
+        toast.error("Failed to delete project");
+      }
     }
   };
 
@@ -646,16 +605,18 @@ export default function ProjectsPage() {
                               <div className="border-t border-slate-800/80 my-1.5" />
 
                               {/* Delete Action */}
-                              <button
-                                onClick={() => {
-                                  setActiveMenuProjectId(null);
-                                  handleDeleteProject(project.id);
-                                }}
-                                className="w-full text-left px-4 py-2 text-xs font-bold text-red-400 hover:text-red-300 hover:bg-red-500/10 flex items-center gap-2 cursor-pointer transition-colors"
-                              >
-                                <Trash2 className="h-3.5 w-3.5 text-red-500" />
-                                Delete Project
-                              </button>
+                              {canEdit && (
+                                <button
+                                  onClick={() => {
+                                    setActiveMenuProjectId(null);
+                                    handleDeleteProject(project.id);
+                                  }}
+                                  className="w-full text-left px-4 py-2 text-xs font-bold text-red-400 hover:text-red-300 hover:bg-red-500/10 flex items-center gap-2 cursor-pointer transition-colors"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5 text-red-500" />
+                                  Delete Project
+                                </button>
+                              )}
                             </motion.div>
                           </>
                         )}

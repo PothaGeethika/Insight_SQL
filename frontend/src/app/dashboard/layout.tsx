@@ -26,25 +26,44 @@ import {
   LucideIcon,
   CreditCard,
   Users,
+  Building2,
+  Network,
+  LayoutDashboard,
+  Check,
+  ChevronDown,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import type { AuthUser } from "@/types";
+import { WorkspaceProvider, useWorkspace } from "@/lib/workspace";
 
 interface NavItem {
   name: string;
   href: string;
   icon: LucideIcon;
+  badgeKey?: "pendingInvites" | "pendingApprovals";
 }
 
 const mainNavItems: NavItem[] = [
   { name: "Home", href: "/dashboard", icon: Home },
   { name: "Chat", href: "/dashboard/chat", icon: MessageSquare },
   { name: "Databases", href: "/dashboard/databases", icon: Database },
+  { name: "Schema", href: "/dashboard/schema", icon: Network },
   { name: "Projects", href: "/dashboard/projects", icon: LayoutGrid },
+  { name: "Dashboards", href: "/dashboard/boards", icon: LayoutDashboard },
   { name: "Saved Queries", href: "/dashboard/saved-queries", icon: Bookmark },
   { name: "Favorites", href: "/dashboard/favorites", icon: Star },
-  { name: "Team", href: "/dashboard/team", icon: Users },
+  { name: "Approvals", href: "/dashboard/approvals", icon: Check, badgeKey: "pendingApprovals" },
+  { name: "Team", href: "/dashboard/team", icon: Users, badgeKey: "pendingInvites" },
   { name: "Billing", href: "/dashboard/billing", icon: CreditCard },
   { name: "Settings", href: "/dashboard/settings", icon: Settings },
 ];
@@ -54,6 +73,27 @@ export default function DashboardLayout({
 }: {
   children: React.ReactNode;
 }) {
+  return (
+    <WorkspaceProvider>
+      <DashboardLayoutInner>{children}</DashboardLayoutInner>
+    </WorkspaceProvider>
+  );
+}
+
+function DashboardLayoutInner({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  const {
+    orgs,
+    activeOrg,
+    activeOrgId,
+    setActiveOrgId,
+    pendingInviteCount,
+    pendingApprovalCount,
+    loading: workspaceLoading,
+  } = useWorkspace();
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(280);
@@ -236,10 +276,71 @@ export default function DashboardLayout({
           )}
         </div>
 
+        {/* Workspace switcher */}
+        {(!collapsed || isMobile) && (
+          <div className="px-3 pt-3">
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={
+                  <button
+                    type="button"
+                    className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl border border-border bg-card/80 hover:bg-accent text-left transition-colors"
+                    disabled={workspaceLoading}
+                  >
+                    <div className="h-7 w-7 rounded-lg bg-indigo-500/15 flex items-center justify-center flex-shrink-0">
+                      <Building2 className="h-3.5 w-3.5 text-indigo-500" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">Workspace</p>
+                      <p className="text-xs font-semibold text-foreground truncate">
+                        {activeOrg?.name || (workspaceLoading ? "Loading…" : "Personal")}
+                      </p>
+                    </div>
+                    <ChevronDown className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
+                  </button>
+                }
+              />
+              <DropdownMenuContent align="start" className="w-64">
+                <DropdownMenuGroup>
+                  <DropdownMenuLabel>Switch workspace</DropdownMenuLabel>
+                  {orgs.length === 0 && (
+                    <DropdownMenuItem disabled>No workspaces yet</DropdownMenuItem>
+                  )}
+                  {orgs.map((org) => (
+                    <DropdownMenuItem
+                      key={org.id}
+                      onClick={() => setActiveOrgId(org.id)}
+                      className="flex items-center gap-2 cursor-pointer"
+                    >
+                      <Building2 className="h-3.5 w-3.5 text-muted-foreground" />
+                      <span className="flex-1 truncate">{org.name}</span>
+                      {org.id === activeOrgId && <Check className="h-3.5 w-3.5 text-indigo-500" />}
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuGroup>
+                <DropdownMenuSeparator />
+                <DropdownMenuGroup>
+                  <Link href="/dashboard/team" className="block">
+                    <DropdownMenuItem className="cursor-pointer w-full">
+                      Manage team…
+                    </DropdownMenuItem>
+                  </Link>
+                </DropdownMenuGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        )}
+
         {/* Navigation */}
         <div className="flex-1 px-3 py-4 space-y-0.5 overflow-y-auto">
           {mainNavItems.map((item) => {
-            const isActive = pathname === item.href;
+            const isActive = pathname === item.href || (item.href !== "/dashboard" && pathname.startsWith(item.href + "/"));
+            const badge =
+              item.badgeKey === "pendingInvites" && pendingInviteCount > 0
+                ? pendingInviteCount
+                : item.badgeKey === "pendingApprovals" && pendingApprovalCount > 0
+                  ? pendingApprovalCount
+                : null;
             return (
               <Link key={item.name} href={item.href} onClick={() => isMobile && setMobileOpen(false)}>
                 <div
@@ -253,7 +354,12 @@ export default function DashboardLayout({
                   {(!collapsed || isMobile) && (
                     <span className="text-sm leading-none">{item.name}</span>
                   )}
-                  {isActive && (!collapsed || isMobile) && (
+                  {badge != null && (!collapsed || isMobile) && (
+                    <span className="ml-auto h-5 min-w-5 px-1.5 rounded-full bg-rose-500 text-white text-[10px] font-bold flex items-center justify-center">
+                      {badge > 9 ? "9+" : badge}
+                    </span>
+                  )}
+                  {badge == null && isActive && (!collapsed || isMobile) && (
                     <div className="ml-auto h-1.5 w-1.5 rounded-full bg-indigo-500" />
                   )}
                 </div>

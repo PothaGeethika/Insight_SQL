@@ -46,6 +46,14 @@ class SQLAgent:
         1. Only return the SQL query. Do not include any explanations or markdown blocks like ```sql.
         2. Ensure the query is compatible with PostgreSQL.
         3. Use table aliases for clarity if joining multiple tables.
+        4. Prefer schema-qualified names when the schema is not public (e.g. sales.orders).
+        5. Read-only SELECT/WITH queries only — never INSERT/UPDATE/DELETE/DDL.
+        
+        Examples:
+        Q: How many users signed up last month?
+        A: SELECT COUNT(*) AS user_count FROM users WHERE created_at >= date_trunc('month', CURRENT_DATE - INTERVAL '1 month') AND created_at < date_trunc('month', CURRENT_DATE);
+        Q: Top 5 products by revenue
+        A: SELECT p.name, SUM(oi.quantity * oi.unit_price) AS revenue FROM order_items oi JOIN products p ON p.id = oi.product_id GROUP BY p.name ORDER BY revenue DESC LIMIT 5;
         
         SQL Query:
         """)
@@ -60,8 +68,15 @@ class SQLAgent:
         
         Rules:
         1. Only return the SQL query. Do not include any explanations or markdown blocks like ```sql.
-        2. Ensure the query is compatible with MySQL.
+        2. Ensure the query is compatible with MySQL (use IFNULL, DATE_SUB, LIMIT).
         3. Use table aliases for clarity if joining multiple tables.
+        4. Read-only SELECT/WITH queries only — never INSERT/UPDATE/DELETE/DDL.
+        
+        Examples:
+        Q: Count orders by status
+        A: SELECT status, COUNT(*) AS cnt FROM orders GROUP BY status ORDER BY cnt DESC;
+        Q: Customers created in the last 7 days
+        A: SELECT id, email, created_at FROM customers WHERE created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY);
         
         MySQL Query:
         """)
@@ -78,9 +93,16 @@ class SQLAgent:
         
         Rules:
         1. Only return the SQL query. Do not include any explanations or markdown blocks like ```sql.
-        2. Ensure the query uses valid Snowflake SQL syntax (e.g., ILIKE instead of ILIKE, LIMIT is supported, use QUALIFY for window function filtering).
+        2. Use valid Snowflake SQL (ILIKE for case-insensitive match, LIMIT supported, QUALIFY for window filters).
         3. Use fully qualified table names if needed (DATABASE.SCHEMA.TABLE).
         4. Use table aliases for clarity if joining multiple tables.
+        5. Read-only SELECT/WITH queries only.
+        
+        Examples:
+        Q: Revenue by month
+        A: SELECT DATE_TRUNC('month', order_date) AS month, SUM(amount) AS revenue FROM orders GROUP BY 1 ORDER BY 1;
+        Q: Find customers whose email contains acme
+        A: SELECT * FROM customers WHERE email ILIKE '%acme%' LIMIT 100;
         
         Snowflake SQL Query:
         """)
@@ -105,7 +127,15 @@ class SQLAgent:
                "limit": 100
            }}
         3. Do not include any explanations or markdown blocks.
-        4. Ensure the query is optimized for performance.
+        4. Only use actions find, aggregate, or count (never insert/update/delete).
+        
+        Examples:
+        Q: Count users in the users collection
+        A: {{"collection":"users","action":"count","query":{{}}}}
+        Q: Find active shipments limited to 50
+        A: {{"collection":"shipments","action":"find","query":{{"status":"active"}},"limit":50}}
+        Q: Group orders by status
+        A: {{"collection":"orders","action":"aggregate","pipeline":[{{"$group":{{"_id":"$status","count":{{"$sum":1}}}}}}]}}
         
         MQL JSON:
         """)
@@ -133,6 +163,12 @@ class SQLAgent:
         4. For nested/object fields, always query the fully qualified dot-notation field name (e.g., use 'destination.city' or 'customer.name' instead of just 'destination' or 'customer').
         5. Use "match" query (instead of "term" query) for text fields (like 'destination.city', names, descriptions) since "term" query does not analyze the search term and will fail to match due to casing (e.g., matching "Dubai" vs "dubai"). Use "term" or "terms" queries only for exact keywords, status fields, or ID fields.
         
+        Examples:
+        Q: Find documents mentioning logistics in the shipments index
+        A: {{"index":"shipments","body":{{"query":{{"match":{{"description":"logistics"}}}},"size":50}}}}
+        Q: Count docs with status delivered
+        A: {{"index":"shipments","body":{{"size":0,"query":{{"term":{{"status.keyword":"delivered"}}}},"aggs":{{"by_status":{{"value_count":{{"field":"_id"}}}}}}}}}}
+        
         Elasticsearch DSL JSON:
         """)
 
@@ -148,6 +184,13 @@ class SQLAgent:
         1. Only return the Cypher query. Do not include any explanations or markdown blocks like ```cypher.
         2. Ensure the query is optimized.
         3. Do not limit the results unless explicitly asked.
+        4. Read-only only — never CREATE/MERGE/DELETE/SET/REMOVE.
+        
+        Examples:
+        Q: List all Person nodes
+        A: MATCH (p:Person) RETURN p LIMIT 100
+        Q: Find friends of Alice
+        A: MATCH (a:Person {{name: 'Alice'}})-[:FRIENDS_WITH]->(b:Person) RETURN b.name AS friend
         
         Cypher Query:
         """)

@@ -22,9 +22,30 @@ import {
   DropdownMenuTrigger,
   DropdownMenuGroup,
 } from "@/components/ui/dropdown-menu";
+import { api } from "@/lib/apiClient";
+import { useWorkspace } from "@/lib/workspace";
+
+function mapSavedQuery(item: any) {
+  const ts = item.saved_at || item.timestamp || item.savedAt || Date.now();
+  const ms = typeof ts === "number" && ts < 1e12 ? ts * 1000 : ts;
+  return {
+    id: item.id,
+    title: item.question || item.title || "Generated SQL Query",
+    sql: item.sql || item.sql_query || "",
+    database: item.database || "PostgreSQL",
+    connection_id: item.connection_id || null,
+    sessionId: item.sessionId || item.session_id || null,
+    date: new Date(ms).toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    }),
+  };
+}
 
 export default function SavedQueriesPage() {
   const router = useRouter();
+  const { activeOrgId } = useWorkspace();
   const [searchQuery, setSearchQuery] = useState("");
   const [sortBy, setSortBy] = useState("newest");
   const [dateFilter, setDateFilter] = useState("all");
@@ -39,41 +60,57 @@ export default function SavedQueriesPage() {
   const [activeExplainConnectionId, setActiveExplainConnectionId] = useState("");
 
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem("favorite_queries");
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        const mapped = parsed.map((item: any) => ({
-          id: item.id,
-          title: item.question || "Generated SQL Query",
-          sql: item.sql || "",
-          database: item.database || "PostgreSQL",
-          connection_id: item.connection_id || null,
-          sessionId: item.sessionId || null,
-          date: new Date(item.timestamp || Date.now()).toLocaleDateString('en-US', {
-            month: 'short',
-            day: 'numeric',
-            year: 'numeric'
-          })
-        }));
-        setQueries(mapped);
+    const load = async () => {
+      try {
+        const data = await api.savedQueries.list(activeOrgId);
+        if (Array.isArray(data) && data.length > 0) {
+          setQueries(data.map(mapSavedQuery));
+          return;
+        }
+        // One-time migration from localStorage favorite_queries
+        const migrated = localStorage.getItem("favorite_queries_migrated");
+        const saved = localStorage.getItem("favorite_queries");
+        if (!migrated && saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            for (const item of parsed) {
+              await api.savedQueries.save({
+                id: item.id,
+                question: item.question,
+                answer: item.answer,
+                sql: item.sql,
+                tableData: item.tableData,
+                database: item.database,
+                saved_at: typeof item.timestamp === "number" ? item.timestamp : Date.now(),
+                org_id: activeOrgId,
+                connection_id: item.connection_id,
+                sessionId: item.sessionId,
+              }).catch(() => null);
+            }
+            localStorage.setItem("favorite_queries_migrated", "1");
+            localStorage.removeItem("favorite_queries");
+            const refreshed = await api.savedQueries.list(activeOrgId);
+            setQueries(Array.isArray(refreshed) ? refreshed.map(mapSavedQuery) : []);
+            return;
+          }
+        }
+        setQueries([]);
+      } catch (e) {
+        console.error("Failed to load saved queries", e);
+        setQueries([]);
       }
-    } catch (e) {
-      console.error("Failed to load saved queries", e);
-    }
-  }, []);
+    };
+    load();
+  }, [activeOrgId]);
 
-  const handleDelete = (id: string) => {
+  const handleDelete = async (id: string) => {
     try {
-      const saved = localStorage.getItem("favorite_queries");
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        const filtered = parsed.filter((item: any) => item.id !== id);
-        localStorage.setItem("favorite_queries", JSON.stringify(filtered));
-        setQueries(queries.filter((q) => q.id !== id));
-      }
+      await api.savedQueries.delete(id);
+      setQueries((prev) => prev.filter((q) => q.id !== id));
+      toast.success("Saved query deleted");
     } catch (e) {
       console.error("Failed to delete query", e);
+      toast.error("Failed to delete saved query");
     }
   };
 

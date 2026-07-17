@@ -49,12 +49,21 @@ export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   sql?: string;
+  mql?: string;
   generated_query?: string;
   query_type?: string;
   attachmentUrl?: string;
   attachmentType?: "image" | "video";
   timestamp: string;
   tableData?: TableData;
+  results?: Array<{
+    connection_id?: string;
+    database?: string;
+    headers: string[];
+    rows: any[][];
+    query?: string;
+    dialect?: string;
+  }>;
   visualization?: string | null;
   versions?: MessageVersion[];
   currentVersionIndex?: number;

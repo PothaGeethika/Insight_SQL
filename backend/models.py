@@ -13,6 +13,7 @@ class DatabaseConnection(BaseModel):
     status: str = "disconnected"
     is_default: bool = False
     user_id: Optional[str] = None  # owner – used for multi-user isolation
+    org_id: Optional[str] = None  # optional workspace isolation
     # Snowflake-specific fields
     account: Optional[str] = None
     warehouse: Optional[str] = None
@@ -22,6 +23,9 @@ class DatabaseConnection(BaseModel):
     api_key: Optional[str] = None
     cloud_id: Optional[str] = None
     custom_url: Optional[str] = None
+    # Connection robustness (optional; used by SQLAlchemy adapters)
+    connect_timeout: Optional[int] = None
+    pool_size: Optional[int] = None
 
 class ConnectionRequest(BaseModel):
     name: str
@@ -31,6 +35,7 @@ class ConnectionRequest(BaseModel):
     database: str
     username: Optional[str] = None
     password: Optional[str] = None
+    org_id: Optional[str] = None
     # Snowflake-specific fields
     account: Optional[str] = None
     warehouse: Optional[str] = None
@@ -40,6 +45,8 @@ class ConnectionRequest(BaseModel):
     api_key: Optional[str] = None
     cloud_id: Optional[str] = None
     custom_url: Optional[str] = None
+    connect_timeout: Optional[int] = None
+    pool_size: Optional[int] = None
 
 class QueryRequest(BaseModel):
     question: str

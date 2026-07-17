@@ -32,12 +32,46 @@ from config import (
     LLM_MODEL,
     UVICORN_HOST,
     UVICORN_PORT,
+    SCHEMA_CACHE_TTL_SECONDS,
+    DB_CONNECT_TIMEOUT,
 )
 import user_data as ud
 import billing
 import teams as tm
+from schema_cache import SchemaCache, format_structured_schema
+from sql_validator import validate_query_for_dialect
+from adapters.factory import AdapterFactory
+import adapters.registry  # noqa: F401
+from adapters.base import OperationKind
+from adapters.classifier import OperationClassifier
+from approval.repository import ApprovalRepository
+from approval.policy_engine import PolicyEngine
+from approval.models import PolicyContext
+from approval.execution import ExecutionEngine
+from approval.approval_engine import ApprovalEngine
+from approval.notifications import NotificationHub
 
 log = get_logger("main")
+
+
+def _enforce_query_quota(user_id: str, *, org_id: Optional[str] = None) -> None:
+    """Consume one monthly query credit or raise HTTP 402."""
+    try:
+        billing.consume_query_quota(str(user_id), org_id=org_id)
+    except billing.PlanLimitExceeded as e:
+        raise HTTPException(status_code=402, detail=e.message) from e
+
+
+def _enforce_connection_quota(user_id: str) -> None:
+    """Raise HTTP 402 if the user is at their plan's connection limit."""
+    if not connection_manager:
+        raise HTTPException(status_code=500, detail="Connection manager not initialized")
+    uid = str(user_id)
+    owned = [c for c in connection_manager.list_connections() if c.user_id == uid]
+    try:
+        billing.assert_can_add_connection(uid, len(owned))
+    except billing.PlanLimitExceeded as e:
+        raise HTTPException(status_code=402, detail=e.message) from e
 
 load_dotenv()
 
@@ -75,6 +109,12 @@ if current_dir not in sys.path:
 # ---------------------------------------------------------------------------
 sql_agent: Optional[SQLAgent] = None
 connection_manager: Optional[ConnectionManager] = None
+schema_cache = SchemaCache(ttl_seconds=SCHEMA_CACHE_TTL_SECONDS)
+approval_repo = ApprovalRepository()
+policy_engine = PolicyEngine(approval_repo)
+execution_engine = ExecutionEngine()
+approval_engine = ApprovalEngine(approval_repo, execution_engine)
+notification_hub = NotificationHub()
 
 
 def init_components():
@@ -107,7 +147,8 @@ def migrate_personal_workspaces():
         # Find all distinct user_ids that have unassigned items
         users = con.execute("SELECT DISTINCT user_id FROM projects WHERE org_id IS NULL "
                             "UNION SELECT DISTINCT user_id FROM chat_sessions WHERE org_id IS NULL "
-                            "UNION SELECT DISTINCT user_id FROM saved_queries WHERE org_id IS NULL").fetchall()
+                            "UNION SELECT DISTINCT user_id FROM saved_queries WHERE org_id IS NULL "
+                            "UNION SELECT DISTINCT user_id FROM dashboards WHERE org_id IS NULL").fetchall()
         
         for row in users:
             uid = row["user_id"]
@@ -121,6 +162,7 @@ def migrate_personal_workspaces():
             con.execute("UPDATE projects SET org_id = ? WHERE user_id = ? AND org_id IS NULL", (org_id, uid))
             con.execute("UPDATE chat_sessions SET org_id = ? WHERE user_id = ? AND org_id IS NULL", (org_id, uid))
             con.execute("UPDATE saved_queries SET org_id = ? WHERE user_id = ? AND org_id IS NULL", (org_id, uid))
+            con.execute("UPDATE dashboards SET org_id = ? WHERE user_id = ? AND org_id IS NULL", (org_id, uid))
 
 migrate_personal_workspaces()
 
@@ -132,21 +174,230 @@ migrate_personal_workspaces()
 def _build_db_manager(conn):
     db_url = connection_manager.format_connection_url(conn)
     db_type = conn.type
+    connect_timeout = getattr(conn, "connect_timeout", None) or DB_CONNECT_TIMEOUT
+    pool_size = getattr(conn, "pool_size", None)
     if db_type == "mongodb":
         from mongo_database import MongoDatabaseManager
-        return MongoDatabaseManager(db_url)
+        return MongoDatabaseManager(db_url, connect_timeout_ms=int(connect_timeout) * 1000)
     elif db_type == "snowflake":
         from snowflake_database import SnowflakeDatabaseManager
-        return SnowflakeDatabaseManager(db_url)
+        return SnowflakeDatabaseManager(db_url, connect_timeout=connect_timeout, pool_size=pool_size)
     elif db_type == "elasticsearch":
         from elasticsearch_database import ElasticsearchDatabaseManager
         return ElasticsearchDatabaseManager(db_url)
     elif db_type == "neo4j":
         from neo4j_database import Neo4jDatabaseManager
-        return Neo4jDatabaseManager(db_url)
+        return Neo4jDatabaseManager(db_url, connect_timeout=connect_timeout)
     else:
         from database import DatabaseManager
-        return DatabaseManager(db_url)
+        return DatabaseManager(db_url, connect_timeout=connect_timeout, pool_size=pool_size)
+
+
+def _assert_conn_owner(conn, current_user: dict):
+    if conn and conn.user_id and conn.user_id != str(current_user["id"]):
+        raise HTTPException(status_code=403, detail="Not your database connection.")
+
+
+def _get_role_for_connection(conn, current_user: dict) -> str:
+    uid = str(current_user["id"])
+    if conn.org_id:
+        role = tm.get_member_role(conn.org_id, uid)
+        return role or "member"
+    return "owner"
+
+
+def _approval_workspace_role(workspace_id: Optional[str], user_id: str) -> Optional[str]:
+    ws = str(workspace_id or "")
+    if not ws or ws.startswith("user:"):
+        return "owner"
+    try:
+        return tm.get_member_role(ws, user_id)
+    except Exception as ex:
+        log.warning("[APPROVAL] Failed to resolve role for workspace=%s user=%s: %s", ws, user_id, ex)
+        return None
+
+
+def _can_view_approval(row: dict[str, Any], user_id: str) -> bool:
+    if str(row.get("requester_id") or "") == user_id:
+        return True
+    role = _approval_workspace_role(row.get("workspace_id"), user_id)
+    return role in ("owner", "admin")
+
+
+def _short_db_error(exc: Exception) -> str:
+    """Return a concise, user-facing database error message."""
+    msg = str(exc).strip()
+    if "FATAL:" in msg:
+        return msg.split("FATAL:", 1)[1].strip().split("\n")[0]
+    if "OperationalError" in msg and ")" in msg:
+        tail = msg.split(")", 1)[-1].strip()
+        if tail:
+            return tail.split("\n")[0]
+    return msg.split("\n")[0][:400]
+
+
+def _execute_generated_query(
+    *,
+    conn,
+    generated_query: str,
+    current_user: dict,
+    temp_manager,
+    original_prompt: Optional[str] = None,
+):
+    """Classify + policy gate, then execute via adapter or legacy manager."""
+    plan = OperationClassifier.classify(generated_query, conn.type)
+    allow_mutating = plan.operation != OperationKind.READ
+    validate_query_for_dialect(generated_query, conn.type, allow_mutating=allow_mutating)
+    policy_run = _run_query_with_policy(
+        conn=conn,
+        generated_query=generated_query,
+        current_user=current_user,
+        original_prompt=original_prompt,
+    )
+    if policy_run.get("pending"):
+        return {
+            "pending": True,
+            "request": policy_run["request"],
+            "plan": policy_run["plan"],
+            "preview": policy_run["preview"],
+            "policy_run": policy_run,
+        }
+    if policy_run.get("fallback_execute_query"):
+        headers, rows = temp_manager.execute_query(generated_query, enforce_readonly=False)
+    else:
+        headers = policy_run["result"]["headers"]
+        rows = policy_run["result"]["rows"]
+    return {"pending": False, "headers": headers, "rows": rows, "policy_run": policy_run}
+
+
+def _approval_reason(operation: str, decision_reason: str) -> str:
+    op = (operation or "").upper()
+    if op in ("SCHEMA", "ADMIN"):
+        return decision_reason or "This query modifies the database schema and requires approval."
+    if op == "WRITE":
+        return decision_reason or "This query writes or deletes data and requires approval."
+    return decision_reason or "This query requires workspace approval before it can run."
+
+
+def _run_query_with_policy(*, conn, generated_query: str, current_user: dict, original_prompt: Optional[str] = None):
+    try:
+        adapter = AdapterFactory.create(conn)
+        plan = adapter.classify_operation(generated_query)
+        estimated_rows = adapter.estimate_affected_rows(generated_query)
+        workspace_id = conn.org_id or f"user:{current_user['id']}"
+        requester_role = _get_role_for_connection(conn, current_user)
+        ctx = PolicyContext(
+            workspace_id=workspace_id,
+            connection_id=conn.id,
+            connection_owner_id=conn.user_id,
+            requester_id=str(current_user["id"]),
+            requester_role=requester_role,
+            db_type=conn.type,
+            operation=plan.operation.value,
+            estimated_rows=estimated_rows,
+        )
+        decision = policy_engine.evaluate(ctx)
+        preview = adapter.generate_preview(plan)
+    except Exception as ex:
+        # Never block read-path UX because approval framework internals failed.
+        log.warning("[APPROVAL] Policy path failed for conn=%s type=%s: %s", conn.id, conn.type, ex)
+        return {"pending": False, "fallback_execute_query": True}
+
+    if decision.action == "deny":
+        raise HTTPException(status_code=403, detail="Operation denied by workspace policy")
+
+    if decision.action == "require_approval" and plan.operation != OperationKind.READ:
+        reason = _approval_reason(plan.operation.value, getattr(decision, "reason", "") or "")
+        created = approval_engine.create_request(
+            {
+                "workspace_id": workspace_id,
+                "connection_id": conn.id,
+                "db_type": conn.type,
+                "operation": plan.operation.value,
+                "requester_id": str(current_user["id"]),
+                "requester_role": requester_role,
+                "query": generated_query,
+                "preview_json": json.dumps(preview.__dict__),
+                "original_prompt": original_prompt,
+                "risk_level": plan.risk,
+                "reason": reason,
+            }
+        )
+        notification_hub.emit(
+            workspace_id,
+            "approval_created",
+            {
+                "request_id": created["id"],
+                "connection_id": conn.id,
+                "operation": created.get("operation"),
+                "original_prompt": original_prompt,
+            },
+        )
+        return {"pending": True, "request": created, "plan": plan, "preview": preview.__dict__}
+
+    exec_result = execution_engine.run(adapter, plan)
+    return {"pending": False, "plan": plan, "result": exec_result}
+
+
+def _infer_visualization(question: str) -> Optional[str]:
+    question_lower = (question or "").lower()
+    if "bar chart" in question_lower or "bar graph" in question_lower:
+        return "bar"
+    if "pie chart" in question_lower or "pie graph" in question_lower:
+        return "pie"
+    if "line chart" in question_lower or "line graph" in question_lower:
+        return "line"
+    if "area chart" in question_lower or "area graph" in question_lower:
+        return "area"
+    if any(w in question_lower for w in ("chart", "graph", "dashboard", "plot")):
+        return "auto"
+    return None
+
+
+def _get_schema_for_connection(conn, *, refresh: bool = False) -> tuple[str, Any]:
+    """Return (schema_text, structured) using the in-memory TTL cache."""
+    conn_id = conn.id
+    if not refresh:
+        cached = schema_cache.get(conn_id)
+        if cached:
+            return cached["text"], cached["structured"]
+
+    manager = _build_db_manager(conn)
+    structured = None
+    if hasattr(manager, "get_schema_structured"):
+        try:
+            structured = manager.get_schema_structured()
+        except Exception as ex:
+            log.warning("[SCHEMA] structured fetch failed for %s: %s", conn_id, ex)
+    if structured:
+        text = format_structured_schema(structured) or manager.get_schema()
+    else:
+        text = manager.get_schema()
+        structured = {"dialect": conn.type, "raw_text": True, "text": text}
+    schema_cache.set(conn_id, structured, text)
+    return text, structured
+
+
+def _combine_legacy_table(per_source: list[dict]) -> dict:
+    """Deprecated combined view with SOURCE_DATABASE column for older clients."""
+    all_headers: list = []
+    seen: set = set()
+    for item in per_source:
+        for h in item.get("headers") or []:
+            if h not in seen:
+                seen.add(h)
+                all_headers.append(h)
+    combined_headers = ["SOURCE_DATABASE"] + all_headers
+    combined_rows = []
+    for item in per_source:
+        headers = item.get("headers") or []
+        h_to_idx = {h: idx for idx, h in enumerate(headers)}
+        db_name = item.get("database") or item.get("connection_id") or ""
+        for row in item.get("rows") or []:
+            combined_rows.append(
+                [db_name] + [row[h_to_idx[h]] if h in h_to_idx else None for h in all_headers]
+            )
+    return {"headers": combined_headers, "rows": combined_rows}
 
 
 # ---------------------------------------------------------------------------
@@ -181,11 +432,26 @@ def get_database_types(current_user: dict = Depends(get_current_user)):
 
 
 @app.get("/databases")
-def get_databases(current_user: dict = Depends(get_current_user)):
-    log.info("[API] GET /databases  user=%s", current_user["id"])
-    connections = connection_manager.list_connections()
-    # Filter to this user's connections only
-    user_conns = [c for c in connections if c.user_id == str(current_user["id"]) or c.user_id is None]
+def get_databases(org_id: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    log.info("[API] GET /databases  user=%s  org_id=%s", current_user["id"], org_id)
+    if not connection_manager:
+        log.warning("[API] Connection manager unavailable; returning empty list.")
+        return []
+    try:
+        connections = connection_manager.list_connections()
+    except Exception as ex:
+        log.error("[API] Failed to list connections: %s", ex, exc_info=True)
+        return []
+    # Filter to this user's connections only (legacy rows may have user_id=None)
+    uid = str(current_user["id"])
+    user_conns = [c for c in connections if c.user_id == uid or c.user_id is None]
+    if org_id:
+        # Include workspace-scoped DBs AND legacy rows with no org_id yet
+        # (otherwise existing connections disappear after workspace switcher landed).
+        user_conns = [
+            c for c in user_conns
+            if c.org_id == org_id or c.org_id is None
+        ]
     log.info("[API] Returning %d database connection(s) for user=%s.", len(user_conns), current_user["id"])
     return user_conns
 
@@ -205,9 +471,16 @@ def test_database_connection(
         elif request.type == "snowflake":
             if not request.account or not request.database:
                 return {"status": "error", "message": "Account Identifier and Database name are required for Snowflake."}
+        elif request.type == "bigquery":
+            if not request.custom_url and not request.database:
+                return {"status": "error", "message": "Project/dataset (database) or custom_url is required for BigQuery."}
+        elif request.type in ("redshift", "clickhouse", "oracle"):
+            if not request.custom_url and (not request.host or not request.database):
+                return {"status": "error", "message": f"Host and Database (or custom_url) are required for {request.type}."}
         elif request.type not in ["sqlite", "mongodb", "neo4j"] and (not request.host or not request.database):
             return {"status": "error", "message": "Host and Database name are required for this database type."}
 
+        timeout = request.connect_timeout or DB_CONNECT_TIMEOUT
         dummy_conn = DatabaseConnection(**request.dict())
         db_url = cm.format_connection_url(dummy_conn)
 
@@ -219,13 +492,14 @@ def test_database_connection(
 
         if is_mongodb:
             from pymongo import MongoClient
-            client = MongoClient(db_url, serverSelectionTimeoutMS=5000)
+            client = MongoClient(db_url, serverSelectionTimeoutMS=int(timeout) * 1000, connectTimeoutMS=int(timeout) * 1000)
             client.admin.command('ping')
             return {"status": "success", "message": "Connection successful! MongoDB is reachable."}
         elif is_snowflake:
-            from sqlalchemy import create_engine, text as sa_text
-            engine = create_engine(db_url)
-            with engine.connect() as conn:
+            from snowflake_database import SnowflakeDatabaseManager
+            mgr = SnowflakeDatabaseManager(db_url, connect_timeout=timeout)
+            with mgr.engine.connect() as conn:
+                from sqlalchemy import text as sa_text
                 conn.execute(sa_text("SELECT 1"))
             return {"status": "success", "message": "Connection successful! Snowflake is reachable."}
         elif is_elasticsearch:
@@ -236,13 +510,14 @@ def test_database_connection(
             raise Exception("Elasticsearch ping failed.")
         elif is_neo4j:
             from neo4j_database import Neo4jDatabaseManager
-            neo_mgr = Neo4jDatabaseManager(db_url)
+            neo_mgr = Neo4jDatabaseManager(db_url, connect_timeout=timeout)
             neo_mgr.driver.verify_connectivity()
             return {"status": "success", "message": "Connection successful! Neo4j is reachable."}
         else:
-            from sqlalchemy import create_engine, text as sa_text
-            engine = create_engine(db_url, connect_args={'connect_timeout': 5})
-            with engine.connect() as conn:
+            from database import DatabaseManager
+            mgr = DatabaseManager(db_url, connect_timeout=timeout, pool_size=request.pool_size)
+            from sqlalchemy import text as sa_text
+            with mgr.engine.connect() as conn:
                 conn.execute(sa_text("SELECT 1"))
             return {"status": "success", "message": "Connection successful! Database is reachable."}
 
@@ -258,11 +533,15 @@ def add_database(
 ):
     log.info("[API] POST /databases  name='%s'  type='%s'  user=%s", request.name, request.type, current_user["id"])
     try:
+        _enforce_connection_quota(current_user["id"])
         data = request.dict()
         data["user_id"] = str(current_user["id"])
+        # org_id comes from request body when provided
         conn = connection_manager.add_connection(data)
-        log.info("[API] Database added successfully – id='%s'", conn.id)
+        log.info("[API] Database added successfully – id='%s' org_id='%s'", conn.id, conn.org_id)
         return conn
+    except HTTPException:
+        raise
     except Exception as e:
         log.error("[API] Failed to add database: %s", e, exc_info=True)
         raise HTTPException(status_code=400, detail=str(e))
@@ -275,9 +554,9 @@ def delete_database(
 ):
     log.info("[API] DELETE /databases/%s  user=%s", conn_id, current_user["id"])
     conn = connection_manager.get_connection(conn_id)
-    if conn and conn.user_id and conn.user_id != str(current_user["id"]):
-        raise HTTPException(status_code=403, detail="Not your database connection.")
+    _assert_conn_owner(conn, current_user)
     connection_manager.delete_connection(conn_id)
+    schema_cache.invalidate(conn_id)
     return {"status": "deleted"}
 
 
@@ -288,11 +567,11 @@ def update_database(
     current_user: dict = Depends(get_current_user),
 ):
     conn = connection_manager.get_connection(conn_id)
-    if conn and conn.user_id and conn.user_id != str(current_user["id"]):
-        raise HTTPException(status_code=403, detail="Not your database connection.")
+    _assert_conn_owner(conn, current_user)
     updated = connection_manager.update_connection(conn_id, request.dict())
     if not updated:
         raise HTTPException(status_code=404, detail="Connection not found")
+    schema_cache.invalidate(conn_id)
     return updated
 
 
@@ -302,6 +581,8 @@ def set_default_database(
     current_user: dict = Depends(get_current_user),
 ):
     try:
+        conn = connection_manager.get_connection(conn_id)
+        _assert_conn_owner(conn, current_user)
         connections = connection_manager._load()
         current_status = False
         for c in connections:
@@ -311,8 +592,55 @@ def set_default_database(
                 break
         connection_manager._save(connections)
         return {"status": "success", "is_default": current_status}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/databases/{conn_id}/schema")
+def get_database_schema(
+    conn_id: str,
+    refresh: bool = False,
+    current_user: dict = Depends(get_current_user),
+):
+    """Return structured schema JSON for the schema explorer / agent prompts."""
+    log.info("[API] GET /databases/%s/schema refresh=%s user=%s", conn_id, refresh, current_user["id"])
+    conn = connection_manager.get_connection(conn_id)
+    if not conn:
+        raise HTTPException(status_code=404, detail="Connection not found")
+    _assert_conn_owner(conn, current_user)
+    try:
+        was_cached = (not refresh) and schema_cache.get(conn_id) is not None
+        if refresh:
+            schema_cache.invalidate(conn_id)
+        text, structured = _get_schema_for_connection(conn, refresh=refresh)
+        return {
+            "connection_id": conn_id,
+            "database": conn.name,
+            "dialect": conn.type,
+            "schema": structured,
+            "schema_text": text,
+            "cached": was_cached,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error("[API] Schema fetch failed for %s: %s", conn_id, e, exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to fetch schema: {e}")
+
+
+@app.post("/databases/{conn_id}/schema/invalidate")
+def invalidate_database_schema(
+    conn_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    conn = connection_manager.get_connection(conn_id)
+    if not conn:
+        raise HTTPException(status_code=404, detail="Connection not found")
+    _assert_conn_owner(conn, current_user)
+    schema_cache.invalidate(conn_id)
+    return {"status": "invalidated", "connection_id": conn_id}
 
 
 # ---------------------------------------------------------------------------
@@ -339,6 +667,7 @@ def ask_question(
     log.info("[API] ════ POST /ask  user=%s ════", current_user["id"])
     log.info("[API] Question  : %s", request.question)
     log.info("[API] Provider  : %s  Model: %s", request.provider, request.model)
+    _enforce_query_quota(current_user["id"])
 
     try:
         selected_connection_ids = []
@@ -355,19 +684,21 @@ def ask_question(
         if not selected_connection_ids:
             raise HTTPException(status_code=400, detail="No database connected. Please select or add a database first.")
 
-        success_results = []
+        per_source_results = []
         query_details = []
         mql_details = []
+        query_errors: list[str] = []
 
         for conn_id in selected_connection_ids:
             conn = connection_manager.get_connection(conn_id)
             if not conn:
                 continue
+            _assert_conn_owner(conn, current_user)
 
             db_type = conn.type
             try:
                 temp_manager = _build_db_manager(conn)
-                schema = temp_manager.get_schema()
+                schema, _structured = _get_schema_for_connection(conn)
 
                 generated_query = sql_agent.generate_query(
                     request.question,
@@ -380,25 +711,42 @@ def ask_question(
                 if not generated_query.strip() or "NOT_APPLICABLE" in generated_query:
                     continue
 
-                max_retries = DB_QUERY_MAX_RETRIES
-                attempt = 0
-                while attempt <= max_retries:
-                    try:
-                        headers, rows = temp_manager.execute_query(generated_query)
-                        success_results.append((headers, rows, conn.name))
-                        break
-                    except ValueError as ve:
-                        raise ve
-                    except Exception as e:
-                        if attempt < max_retries:
-                            log.warning("[API] DB query failed. Retrying with self-heal (attempt %d). Error: %s", attempt + 1, e)
-                            generated_query = sql_agent.fix_query(
-                                request.question, schema, generated_query, str(e),
-                                db_type=db_type, provider=request.provider, model_name=request.model
-                            )
-                            attempt += 1
-                        else:
-                            raise e
+                exec_out = _execute_generated_query(
+                    conn=conn,
+                    generated_query=generated_query,
+                    current_user=current_user,
+                    temp_manager=temp_manager,
+                    original_prompt=request.question,
+                )
+                if exec_out.get("pending"):
+                    pending = exec_out["request"]
+                    return {
+                        "id": os.urandom(8).hex(),
+                        "role": "assistant",
+                        "status": "pending_approval",
+                        "pending_approval": True,
+                        "approval_id": pending["id"],
+                        "request_id": pending["id"],
+                        "query": generated_query,
+                        "original_prompt": request.question,
+                        "operation": pending["operation"],
+                        "risk_level": exec_out["plan"].risk,
+                        "reason": pending.get("reason"),
+                        "preview": exec_out["preview"],
+                        "connection_id": conn.id,
+                        "database": conn.name,
+                        "content": "This action requires approval before execution.",
+                    }
+                headers = exec_out["headers"]
+                rows = exec_out["rows"]
+                per_source_results.append({
+                    "connection_id": conn_id,
+                    "database": conn.name,
+                    "headers": headers,
+                    "rows": rows,
+                    "query": generated_query,
+                    "dialect": db_type,
+                })
 
                 if db_type == "mongodb":
                     mql_details.append(f"-- {conn.name} (MongoDB):\n{generated_query}")
@@ -415,27 +763,19 @@ def ask_question(
                 raise HTTPException(status_code=400, detail=str(ve))
             except Exception as e:
                 log.error("[API] Error querying '%s': %s", conn.name, e, exc_info=True)
+                query_errors.append(f"{conn.name}: {_short_db_error(e)}")
                 continue
 
-        if not success_results:
-            raise HTTPException(status_code=500, detail="No query returned valid results from any selected database.")
+        if not per_source_results:
+            if query_errors:
+                detail = query_errors[0] if len(query_errors) == 1 else "; ".join(query_errors[:3])
+            else:
+                detail = "No query returned valid results from any selected database."
+            raise HTTPException(status_code=500, detail=detail)
 
-        # Combine results from multiple databases
-        all_headers: list = []
-        seen: set = set()
-        for headers, rows, _ in success_results:
-            for h in headers:
-                if h not in seen:
-                    seen.add(h)
-                    all_headers.append(h)
-
-        combined_headers = ["SOURCE_DATABASE"] + all_headers
-        combined_rows = []
-        for headers, rows, db_name in success_results:
-            h_to_idx = {h: idx for idx, h in enumerate(headers)}
-            for row in rows:
-                combined_row = [db_name] + [row[h_to_idx[h]] if h in h_to_idx else None for h in all_headers]
-                combined_rows.append(combined_row)
+        legacy_table = _combine_legacy_table(per_source_results)
+        combined_headers = legacy_table["headers"]
+        combined_rows = legacy_table["rows"]
 
         combined_sql = "\n\n".join(query_details) if query_details else None
         combined_mql = "\n\n".join(mql_details) if mql_details else None
@@ -449,34 +789,19 @@ def ask_question(
             combined_rows,
             provider=request.provider,
             model_name=request.model,
-        ) if success_results else None
+        ) if per_source_results else None
 
         if not content_msg:
-            db_names_str = ", ".join(r[2] for r in success_results)
+            db_names_str = ", ".join(r["database"] for r in per_source_results)
             content_msg = f"Results from database(s): {db_names_str}"
 
-        primary_db_type = "postgresql"
-        if selected_connection_ids:
-            c = connection_manager.get_connection(selected_connection_ids[0])
-            if c:
-                primary_db_type = c.type
+        primary_db_type = per_source_results[0]["dialect"] if per_source_results else "postgresql"
 
         elapsed_total = time.perf_counter() - t_start
-        log.info("[API] /ask completed in %.2fs – %d row(s) × %d col(s).",
-                 elapsed_total, len(combined_rows), len(combined_headers))
+        log.info("[API] /ask completed in %.2fs – %d source(s), %d combined row(s).",
+                 elapsed_total, len(per_source_results), len(combined_rows))
 
-        question_lower = request.question.lower()
-        visualization = None
-        if "bar chart" in question_lower or "bar graph" in question_lower:
-            visualization = "bar"
-        elif "pie chart" in question_lower or "pie graph" in question_lower:
-            visualization = "pie"
-        elif "line chart" in question_lower or "line graph" in question_lower:
-            visualization = "line"
-        elif "area chart" in question_lower or "area graph" in question_lower:
-            visualization = "area"
-        elif any(w in question_lower for w in ("chart", "graph", "dashboard", "plot")):
-            visualization = "auto"
+        visualization = _infer_visualization(request.question)
 
         return {
             "id": os.urandom(8).hex(),
@@ -488,6 +813,8 @@ def ask_question(
             "query_type": primary_db_type,
             "timestamp": timestamp,
             "visualization": visualization,
+            "results": per_source_results,
+            # Legacy combined view (SOURCE_DATABASE column) for older clients
             "tableData": {"headers": combined_headers, "rows": combined_rows},
         }
 
@@ -508,6 +835,8 @@ async def ask_question_stream(
 ):
     request = payload
     """SSE streaming version of /ask — sends SQL + table data first, then streams the synthesis token by token."""
+    # Enforce before opening the SSE stream so clients get a clean HTTP 402.
+    _enforce_query_quota(current_user["id"])
 
     async def event_generator():
         try:
@@ -528,16 +857,23 @@ async def ask_question_stream(
                 return
 
             # ── 2. Generate SQL + execute for each DB ─────────────────
-            success_results = []
+            per_source_results = []
             query_details = []
+            mql_details = []
+            query_errors: list[str] = []
 
             for conn_id in selected_connection_ids:
                 conn = connection_manager.get_connection(conn_id)
                 if not conn:
                     continue
                 try:
+                    _assert_conn_owner(conn, current_user)
+                except HTTPException as he:
+                    yield f"data: {json.dumps({'type': 'error', 'data': he.detail})}\n\n"
+                    return
+                try:
                     temp_manager = _build_db_manager(conn)
-                    schema = temp_manager.get_schema()
+                    schema, _structured = _get_schema_for_connection(conn)
 
                     generated_query = sql_agent.generate_query(
                         request.question, schema,
@@ -549,76 +885,102 @@ async def ask_question_stream(
                     if not generated_query.strip() or "NOT_APPLICABLE" in generated_query:
                         continue
 
-                    max_retries = DB_QUERY_MAX_RETRIES
-                    attempt = 0
-                    while attempt <= max_retries:
-                        try:
-                            headers, rows = temp_manager.execute_query(generated_query)
-                            success_results.append((headers, rows, conn.name))
-                            query_details.append(f"-- {conn.name} ({conn.type.upper()}):\n{generated_query}")
-                            break
-                        except ValueError as ve:
-                            raise ve
-                        except Exception as e:
-                            if attempt < max_retries:
-                                log.warning("[STREAM] DB query failed. Retrying with self-heal (attempt %d). Error: %s", attempt + 1, e)
-                                generated_query = sql_agent.fix_query(
-                                    request.question, schema, generated_query, str(e),
-                                    db_type=conn.type, provider=request.provider, model_name=request.model
-                                )
-                                attempt += 1
-                            else:
-                                raise e
+                    exec_out = _execute_generated_query(
+                        conn=conn,
+                        generated_query=generated_query,
+                        current_user=current_user,
+                        temp_manager=temp_manager,
+                        original_prompt=request.question,
+                    )
+                    if exec_out.get("pending"):
+                        pending = exec_out["request"]
+                        from datetime import datetime
+                        ts = datetime.now().strftime("%I:%M %p")
+                        label = conn.type.upper()
+                        if conn.type == "mongodb":
+                            pending_mql = f"-- {conn.name} (MongoDB):\n{generated_query}"
+                            pending_sql = None
+                        elif conn.type == "elasticsearch":
+                            pending_mql = f"-- {conn.name} (Elasticsearch DSL):\n{generated_query}"
+                            pending_sql = None
+                        elif conn.type == "neo4j":
+                            pending_sql = f"-- {conn.name} (Neo4j Cypher):\n{generated_query}"
+                            pending_mql = None
+                        else:
+                            pending_sql = f"-- {conn.name} ({label}):\n{generated_query}"
+                            pending_mql = None
+                        yield f"data: {json.dumps({'type': 'sql', 'sql': pending_sql, 'mql': pending_mql, 'timestamp': ts})}\n\n"
+                        evt = {
+                            "type": "pending_approval",
+                            "pending_approval": True,
+                            "approval_id": pending["id"],
+                            "operation": pending["operation"],
+                            "risk_level": exec_out["plan"].risk,
+                            "reason": pending.get("reason"),
+                            "original_prompt": request.question,
+                            "preview": exec_out["preview"],
+                            "query": generated_query,
+                            "connection_id": conn.id,
+                            "database": conn.name,
+                            "timestamp": ts,
+                        }
+                        yield f"data: {json.dumps(evt)}\n\n"
+                        yield f"data: {json.dumps({'type': 'done', 'id': os.urandom(8).hex()})}\n\n"
+                        return
+                    headers = exec_out["headers"]
+                    rows = exec_out["rows"]
+                    per_source_results.append({
+                        "connection_id": conn_id,
+                        "database": conn.name,
+                        "headers": headers,
+                        "rows": rows,
+                        "query": generated_query,
+                        "dialect": conn.type,
+                    })
+                    label = conn.type.upper()
+                    if conn.type == "mongodb":
+                        mql_details.append(f"-- {conn.name} (MongoDB):\n{generated_query}")
+                    elif conn.type == "elasticsearch":
+                        mql_details.append(f"-- {conn.name} (Elasticsearch DSL):\n{generated_query}")
+                    elif conn.type == "neo4j":
+                        query_details.append(f"-- {conn.name} (Neo4j Cypher):\n{generated_query}")
+                    else:
+                        query_details.append(f"-- {conn.name} ({label}):\n{generated_query}")
 
                 except ValueError as ve:
                     yield f"data: {json.dumps({'type': 'error', 'data': str(ve)})}\n\n"
                     return
                 except Exception as e:
                     log.error("[STREAM] DB error on '%s': %s", conn_id, e)
+                    query_errors.append(f"{conn.name}: {_short_db_error(e)}")
                     continue
 
-            if not success_results:
-                yield f"data: {json.dumps({'type': 'error', 'data': 'No results from any database.'})}\n\n"
+            if not per_source_results:
+                if query_errors:
+                    err_msg = query_errors[0] if len(query_errors) == 1 else "; ".join(query_errors[:3])
+                else:
+                    err_msg = "No results from any database."
+                yield f"data: {json.dumps({'type': 'error', 'data': err_msg})}\n\n"
                 return
 
-            # ── 3. Combine multi-DB results ───────────────────────────
-            all_headers: list = []
-            seen: set = set()
-            for h, _, _ in success_results:
-                for col in h:
-                    if col not in seen:
-                        seen.add(col)
-                        all_headers.append(col)
-
-            combined_headers = ["SOURCE_DATABASE"] + all_headers
-            combined_rows = []
-            for h, rows, db_name in success_results:
-                h_to_idx = {col: i for i, col in enumerate(h)}
-                for row in rows:
-                    combined_rows.append(
-                        [db_name] + [row[h_to_idx[col]] if col in h_to_idx else None for col in all_headers]
-                    )
+            # ── 3. Legacy combined + primary results ───────────────────
+            legacy_table = _combine_legacy_table(per_source_results)
+            combined_headers = legacy_table["headers"]
+            combined_rows = legacy_table["rows"]
 
             combined_sql = "\n\n".join(query_details) if query_details else None
+            combined_mql = "\n\n".join(mql_details) if mql_details else None
 
-            question_lower = request.question.lower()
-            visualization = None
-            if "bar chart" in question_lower or "bar graph" in question_lower:
-                visualization = "bar"
-            elif "pie chart" in question_lower or "pie graph" in question_lower:
-                visualization = "pie"
-            elif "line chart" in question_lower or "line graph" in question_lower:
-                visualization = "line"
-            elif any(w in question_lower for w in ("chart", "graph", "plot")):
-                visualization = "auto"
+            visualization = _infer_visualization(request.question)
 
             from datetime import datetime
             timestamp = datetime.now().strftime("%I:%M %p")
 
-            # ── 4. Send SQL immediately ───────────────────────────────
-            yield f"data: {json.dumps({'type': 'sql', 'sql': combined_sql, 'timestamp': timestamp, 'visualization': visualization})}\n\n"
+            # ── 4. Send SQL / MQL immediately ─────────────────────────
+            yield f"data: {json.dumps({'type': 'sql', 'sql': combined_sql, 'mql': combined_mql, 'timestamp': timestamp, 'visualization': visualization})}\n\n"
 
-            # ── 5. Send table data immediately ────────────────────────
+            # ── 5. Per-source results (primary) + legacy combined table ─
+            yield f"data: {json.dumps({'type': 'results', 'results': per_source_results})}\n\n"
             yield f"data: {json.dumps({'type': 'table', 'headers': combined_headers, 'rows': combined_rows})}\n\n"
 
             # ── 6. Stream synthesis token by token ────────────────────
@@ -658,6 +1020,7 @@ def generate_dashboard(
 ):
     request = payload
     log.info("[API] POST /dashboard-generate  user=%s", current_user["id"])
+    _enforce_query_quota(current_user["id"])
 
     if not sql_agent or not connection_manager:
         raise HTTPException(status_code=500, detail="Backend not fully initialized")
@@ -672,7 +1035,7 @@ def generate_dashboard(
 
     try:
         temp_manager = _build_db_manager(conn)
-        schema = temp_manager.get_schema()
+        schema, _structured = _get_schema_for_connection(conn)
         queries = sql_agent.generate_dashboard_queries(schema, provider=request.provider, model_name=request.model)
         if not queries:
             raise HTTPException(status_code=500, detail="Failed to generate dashboard queries")
@@ -680,6 +1043,7 @@ def generate_dashboard(
         widgets = []
         for q in queries:
             try:
+                validate_query_for_dialect(q["query"], conn.type)
                 headers, rows = temp_manager.execute_query(q["query"])
                 if rows:
                     widgets.append({
@@ -738,6 +1102,7 @@ def optimize_query_api(
     current_user: dict = Depends(get_current_user),
 ):
     log.info("[API] POST /optimize user=%s", current_user["id"])
+    _enforce_query_quota(current_user["id"])
     if not payload.connection_id:
         raise HTTPException(status_code=400, detail="connection_id is required")
         
@@ -747,7 +1112,7 @@ def optimize_query_api(
         
     try:
         db_manager = _build_db_manager(conn)
-        schema = db_manager.get_schema()
+        schema, _structured = _get_schema_for_connection(conn)
         
         optimization = sql_agent.optimize_query(
             query=payload.query,
@@ -785,7 +1150,7 @@ def suggest_questions(
         return []
 
     try:
-        schema = current_db_manager.get_schema()
+        schema, _structured = _get_schema_for_connection(conn)
         history_text = ""
         for msg in request.history[-SUGGEST_HISTORY_LIMIT:]:
             role = "User" if msg.get("role") == "user" else "Assistant"
@@ -836,7 +1201,11 @@ def summarize_chat(
 
 @app.get("/history")
 def get_history(org_id: Optional[str] = None, current_user: dict = Depends(get_current_user)):
-    return ud.list_sessions(str(current_user["id"]), org_id=org_id)
+    try:
+        return ud.list_sessions(str(current_user["id"]), org_id=org_id)
+    except Exception as ex:
+        log.error("[API] /history failed for user=%s org=%s: %s", current_user["id"], org_id, ex, exc_info=True)
+        return []
 
 
 @app.put("/history/{session_id}")
@@ -925,6 +1294,40 @@ def delete_project(
     return {"status": "deleted"}
 
 
+# ── Dashboards ─────────────────────────────────────────────────────────────
+
+@app.get("/dashboards")
+def get_dashboards(org_id: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    return ud.list_dashboards(str(current_user["id"]), org_id=org_id)
+
+
+@app.post("/dashboards")
+def create_dashboard(
+    body: Dict[str, Any],
+    current_user: dict = Depends(get_current_user),
+):
+    return ud.upsert_dashboard(str(current_user["id"]), body, org_id=body.get("org_id"))
+
+
+@app.put("/dashboards/{dashboard_id}")
+def update_dashboard(
+    dashboard_id: str,
+    body: Dict[str, Any],
+    current_user: dict = Depends(get_current_user),
+):
+    body["id"] = dashboard_id
+    return ud.upsert_dashboard(str(current_user["id"]), body, org_id=body.get("org_id"))
+
+
+@app.delete("/dashboards/{dashboard_id}")
+def delete_dashboard(
+    dashboard_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    ud.delete_dashboard(str(current_user["id"]), dashboard_id)
+    return {"status": "deleted"}
+
+
 # ---------------------------------------------------------------------------
 # Teams / workspaces
 # ---------------------------------------------------------------------------
@@ -944,6 +1347,16 @@ class RoleUpdateRequest(BaseModel):
 
 class AcceptInviteRequest(BaseModel):
     token: str
+
+
+class ApprovalActionRequest(BaseModel):
+    comment: Optional[str] = None
+
+
+class ApprovalBulkDeleteRequest(BaseModel):
+    ids: Optional[List[str]] = None
+    status: Optional[str] = None
+    org_id: Optional[str] = None
 
 
 @app.get("/orgs")
@@ -1035,7 +1448,6 @@ def invite_member(
         raise HTTPException(status_code=403, detail="Only admins can invite members.")
     try:
         invite = tm.create_invite(org_id, body.email, body.role, str(current_user["id"]))
-        # In production: send invite email here
         return invite
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -1062,6 +1474,190 @@ def accept_invite(body: AcceptInviteRequest, current_user: dict = Depends(get_cu
     return {"status": "accepted", "org_id": result["org_id"]}
 
 
+@app.get("/orgs/{org_id}/approval-policies")
+def get_approval_policies(org_id: str, current_user: dict = Depends(get_current_user)):
+    role = tm.get_member_role(org_id, str(current_user["id"]))
+    if role not in ("owner", "admin"):
+        raise HTTPException(status_code=403, detail="Only owner/admin can read policies.")
+    approval_repo.seed_default_policies(org_id)
+    return approval_repo.list_policies(org_id)
+
+
+@app.put("/orgs/{org_id}/approval-policies")
+def put_approval_policies(org_id: str, body: List[Dict[str, Any]], current_user: dict = Depends(get_current_user)):
+    role = tm.get_member_role(org_id, str(current_user["id"]))
+    if role not in ("owner", "admin"):
+        raise HTTPException(status_code=403, detail="Only owner/admin can update policies.")
+    return approval_repo.replace_policies(org_id, body)
+
+
+@app.get("/approvals")
+def list_approvals(org_id: Optional[str] = None, status: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    uid = str(current_user["id"])
+    try:
+        rows = approval_repo.list_requests(org_id, status)
+        return [row for row in rows if _can_view_approval(row, uid)]
+    except Exception as ex:
+        log.error("[API] /approvals failed for user=%s org=%s status=%s: %s", uid, org_id, status, ex, exc_info=True)
+        return []
+
+
+@app.get("/approvals/mine")
+def list_my_approvals(status: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    uid = str(current_user["id"])
+    try:
+        rows = approval_repo.list_requests(None, status)
+        return [row for row in rows if str(row.get("requester_id") or "") == uid]
+    except Exception as ex:
+        log.error("[API] /approvals/mine failed for user=%s status=%s: %s", uid, status, ex, exc_info=True)
+        return []
+
+
+@app.post("/approvals/{approval_id}/approve")
+def approve_request(approval_id: str, body: ApprovalActionRequest, current_user: dict = Depends(get_current_user)):
+    req = approval_repo.get_request(approval_id)
+    if not req:
+        raise HTTPException(status_code=404, detail="Approval request not found")
+    role = _approval_workspace_role(req.get("workspace_id"), str(current_user["id"]))
+    if role not in ("owner", "admin"):
+        raise HTTPException(status_code=403, detail="Only owner/admin can approve.")
+    conn = connection_manager.get_connection(req["connection_id"])
+    if not conn:
+        raise HTTPException(status_code=404, detail="Connection for this approval request was not found")
+    try:
+        adapter = AdapterFactory.create(conn)
+        plan = adapter.classify_operation(req["query"])
+        resolved = approval_engine.approve(approval_id, str(current_user["id"]), adapter, plan, body.comment)
+    except HTTPException:
+        raise
+    except Exception as ex:
+        log.error("[API] Approve/execute failed id=%s: %s", approval_id, ex, exc_info=True)
+        approval_repo.resolve_request(
+            approval_id, "failed", str(current_user["id"]), body.comment, None, str(ex)
+        )
+        notification_hub.emit(
+            req["workspace_id"],
+            "approval_resolved",
+            {"request_id": approval_id, "status": "failed", "error": str(ex)},
+        )
+        raise HTTPException(status_code=500, detail=f"Approved but execution failed: {ex}") from ex
+
+    try:
+        schema_cache.invalidate(req["connection_id"])
+    except Exception:
+        pass
+
+    summary = {
+        "request_id": approval_id,
+        "status": "approved",
+        "operation": req.get("operation"),
+        "connection_id": req.get("connection_id"),
+        "query": req.get("query"),
+        "message": f"{req.get('operation', 'Query')} executed successfully after approval.",
+        "execution": resolved.get("execution") if isinstance(resolved, dict) else None,
+    }
+    notification_hub.emit(req["workspace_id"], "approval_resolved", summary)
+    notification_hub.emit(req["workspace_id"], "execution_complete", summary)
+    return {**resolved, "message": summary["message"]}
+
+
+@app.post("/approvals/{approval_id}/reject")
+def reject_request(approval_id: str, body: ApprovalActionRequest, current_user: dict = Depends(get_current_user)):
+    req = approval_repo.get_request(approval_id)
+    if not req:
+        raise HTTPException(status_code=404, detail="Approval request not found")
+    role = _approval_workspace_role(req.get("workspace_id"), str(current_user["id"]))
+    if role not in ("owner", "admin"):
+        raise HTTPException(status_code=403, detail="Only owner/admin can reject.")
+    resolved = approval_engine.reject(approval_id, str(current_user["id"]), body.comment)
+    notification_hub.emit(
+        req["workspace_id"],
+        "approval_resolved",
+        {"request_id": approval_id, "status": "rejected", "message": "Query rejected — not executed."},
+    )
+    return {**resolved, "message": "Query rejected — the SQL was not executed."}
+
+
+@app.delete("/approvals/{approval_id}")
+def delete_approval(approval_id: str, current_user: dict = Depends(get_current_user)):
+    req = approval_repo.get_request(approval_id)
+    if not req:
+        raise HTTPException(status_code=404, detail="Approval request not found")
+    role = _approval_workspace_role(req.get("workspace_id"), str(current_user["id"]))
+    if role not in ("owner", "admin"):
+        raise HTTPException(status_code=403, detail="Only owner/admin can delete approvals.")
+    ok = approval_repo.delete_request(approval_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Approval request not found")
+    return {"deleted": True, "id": approval_id}
+
+
+@app.post("/approvals/bulk-delete")
+def bulk_delete_approvals(body: ApprovalBulkDeleteRequest, current_user: dict = Depends(get_current_user)):
+    uid = str(current_user["id"])
+    workspace_id = body.org_id
+    if workspace_id:
+        role = _approval_workspace_role(workspace_id, uid)
+        if role not in ("owner", "admin"):
+            raise HTTPException(status_code=403, detail="Only owner/admin can delete approvals.")
+    elif body.ids:
+        # Verify each id belongs to a workspace the user can manage
+        for rid in body.ids:
+            req = approval_repo.get_request(rid)
+            if not req:
+                continue
+            role = _approval_workspace_role(req.get("workspace_id"), uid)
+            if role not in ("owner", "admin"):
+                raise HTTPException(status_code=403, detail=f"Not allowed to delete approval {rid}")
+    else:
+        raise HTTPException(status_code=400, detail="Provide ids and/or org_id+status")
+
+    if body.status and body.status not in ("pending", "approved", "rejected", "expired", "failed"):
+        raise HTTPException(status_code=400, detail="Invalid status filter")
+
+    deleted = approval_repo.delete_requests(
+        workspace_id=workspace_id,
+        ids=body.ids,
+        status=body.status,
+    )
+    return {"deleted": deleted}
+
+
+@app.get("/approvals/stream")
+async def approvals_stream(org_id: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    uid = str(current_user["id"])
+    workspace_id = org_id or f"user:{uid}"
+    role = _approval_workspace_role(workspace_id, uid) if org_id else "owner"
+    if role is None:
+        raise HTTPException(status_code=403, detail="Not a member of this workspace.")
+    q = notification_hub.subscribe(workspace_id)
+
+    async def events():
+        # Never call blocking queue.Queue.get() on the event loop — that freezes
+        # the whole uvicorn worker (all /orgs, /approvals, /databases hang).
+        import queue as _queue
+
+        try:
+            while True:
+                try:
+                    item = await asyncio.to_thread(q.get, True, 15.0)
+                    yield item
+                except _queue.Empty:
+                    yield "event: ping\ndata: {}\n\n"
+        finally:
+            notification_hub.unsubscribe(workspace_id, q)
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 # ---------------------------------------------------------------------------
 # Billing (Stripe)
 # ---------------------------------------------------------------------------
@@ -1072,7 +1668,13 @@ class CheckoutRequest(BaseModel):
 
 @app.get("/billing/subscription")
 def get_subscription(current_user: dict = Depends(get_current_user)):
-    return billing.get_subscription(str(current_user["id"]))
+    uid = str(current_user["id"])
+    sub = billing.get_subscription(uid)
+    if connection_manager and isinstance(sub.get("usage"), dict):
+        owned = [c for c in connection_manager.list_connections() if c.user_id == uid]
+        sub["usage"]["connections_this_month"] = len(owned)
+        sub["usage"]["connections_used"] = len(owned)
+    return sub
 
 
 @app.post("/billing/checkout")

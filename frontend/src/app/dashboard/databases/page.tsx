@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import * as React from "react";
 import { toast } from "sonner";
 import { motion, AnimatePresence } from "framer-motion";
-import { Plus, MoreHorizontal, X, ChevronDown, CheckCircle2, AlertCircle, Loader2, Edit, Trash2, Link, Unlink, Star, Database, Cloud, Server, Search, ArrowLeft } from "lucide-react";
+import { Plus, MoreHorizontal, X, ChevronDown, CheckCircle2, AlertCircle, Loader2, Edit, Trash2, Link as LinkIcon, Unlink, Star, Database, Cloud, Server, Search, ArrowLeft, Network } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -27,6 +27,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import Link from "next/link";
+import { useWorkspace } from "@/lib/workspace";
+import { api } from "@/lib/apiClient";
 
 /**
  * DynamicIcon — renders either:
@@ -51,7 +54,7 @@ function DynamicIcon({ icon, className = "h-5 w-5" }: { icon: string; className?
   }
 
   if (icon === "Cloud") return <Cloud className={className} />;
-  if (icon === "Link" || icon === "__link__") return <Link className={className} />;
+  if (icon === "Link" || icon === "__link__") return <LinkIcon className={className} />;
   if (icon === "Server") return <Server className={className} />;
 
   return <Database className={className} />;
@@ -147,6 +150,7 @@ const FALLBACK_DB_TYPES = [
 
 
 export default function DatabasesPage() {
+  const { activeOrgId, canEdit } = useWorkspace();
   const [showAddForm, setShowAddForm] = useState(false);
   const [modalStep, setModalStep] = useState<1 | 2>(1);
   const [searchQuery, setSearchQuery] = useState("");
@@ -214,9 +218,8 @@ export default function DatabasesPage() {
 
   const fetchConnections = async () => {
     try {
-      const res = await fetch("/api/backend/databases");
-      if (res.ok) {
-        const data = await res.json();
+      const data = await api.databases.list(activeOrgId);
+      if (Array.isArray(data)) {
         setConnections(data);
       }
     } catch (e) {
@@ -257,7 +260,23 @@ export default function DatabasesPage() {
     fetchDbTypes();
     const favs = JSON.parse(localStorage.getItem("db_favorites") || "[]");
     setDbFavorites(favs);
-  }, []);
+  }, [activeOrgId]);
+
+  const handleDelete = async (connId: string) => {
+    if (!canEdit) {
+      toast.error("Viewers cannot delete database connections.");
+      return;
+    }
+    if (!confirm("Are you sure you want to delete this database connection?")) return;
+    try {
+      await api.databases.delete(connId);
+      toast.success("Database connection deleted.");
+      fetchConnections();
+    } catch (e) {
+      console.error("Failed to delete connection", e);
+      toast.error("Failed to delete connection");
+    }
+  };
 
   useEffect(() => {
     setTestResult(null);
@@ -404,21 +423,6 @@ export default function DatabasesPage() {
     setTestResult(null);
   };
 
-  const handleDelete = async (connId: string) => {
-    if (!confirm("Are you sure you want to delete this database connection?")) return;
-    try {
-      const res = await fetch(`/api/backend/databases/${connId}`, {
-        method: "DELETE",
-      });
-      if (res.ok) {
-        toast.success("Database connection deleted.");
-        fetchConnections();
-      }
-    } catch (e) {
-      console.error("Failed to delete connection", e);
-    }
-  };
-
   const handleToggleConnect = async (conn: any) => {
     try {
       const res = await fetch(`/api/backend/databases/${conn.id}/default`, {
@@ -517,6 +521,7 @@ export default function DatabasesPage() {
   const handleSaveConnection = async () => {
     const payload = getConnectionPayload();
     if (!payload) return;
+    if (activeOrgId) (payload as any).org_id = activeOrgId;
 
     setIsSaving(true);
 
@@ -654,7 +659,7 @@ export default function DatabasesPage() {
                             </>
                           ) : (
                             <>
-                              <Link className="h-4 w-4 text-emerald-500" />
+                              <LinkIcon className="h-4 w-4 text-emerald-500" />
                               <span>Connect</span>
                             </>
                           )}
@@ -677,12 +682,22 @@ export default function DatabasesPage() {
                         </DropdownMenuItem>
 
                         <DropdownMenuItem
-                          onClick={() => handleDelete(card.id)}
-                          className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-red-500/10 hover:text-red-400 text-red-500 rounded-lg text-sm font-medium transition-colors"
+                          onClick={() => { window.location.href = `/dashboard/schema?db=${card.id}`; }}
+                          className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-slate-800 hover:text-white rounded-lg text-sm font-medium transition-colors"
                         >
-                          <Trash2 className="h-4 w-4" />
-                          <span>Delete</span>
+                          <Network className="h-4 w-4 text-indigo-500" />
+                          <span>Explore schema</span>
                         </DropdownMenuItem>
+
+                        {canEdit && (
+                          <DropdownMenuItem
+                            onClick={() => handleDelete(card.id)}
+                            className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-red-500/10 hover:text-red-400 text-red-500 rounded-lg text-sm font-medium transition-colors"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                            <span>Delete</span>
+                          </DropdownMenuItem>
+                        )}
                       </DropdownMenuContent>
                     </DropdownMenu>
                   </div>

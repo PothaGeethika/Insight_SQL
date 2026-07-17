@@ -24,6 +24,12 @@ class ElasticsearchDatabaseManager:
 
         self.connection_url = connection_url
 
+        try:
+            from config import DB_CONNECT_TIMEOUT
+            timeout = int(DB_CONNECT_TIMEOUT)
+        except Exception:
+            timeout = 10
+
         import urllib.parse
         parsed = urllib.parse.urlparse(connection_url)
         query_params = urllib.parse.parse_qs(parsed.query)
@@ -39,7 +45,8 @@ class ElasticsearchDatabaseManager:
         if cloud_id and api_key:
             self.client = Elasticsearch(
                 cloud_id=cloud_id,
-                api_key=api_key
+                api_key=api_key,
+                request_timeout=timeout,
             )
         elif api_key:
             host_netloc = parsed.netloc
@@ -52,7 +59,8 @@ class ElasticsearchDatabaseManager:
                 host_url = host_netloc
             self.client = Elasticsearch(
                 host_url,
-                api_key=api_key
+                api_key=api_key,
+                request_timeout=timeout,
             )
         else:
             host_netloc = parsed.netloc
@@ -65,39 +73,35 @@ class ElasticsearchDatabaseManager:
                     host_url = f"http://{parsed.hostname or default_es_host}:{parsed.port or int(default_es_port)}"
             else:
                 host_url = host_netloc
-                
+
             if parsed.username and parsed.password:
                 self.client = Elasticsearch(
                     [host_url],
-                    basic_auth=(parsed.username, parsed.password)
+                    basic_auth=(parsed.username, parsed.password),
+                    request_timeout=timeout,
                 )
             else:
-                self.client = Elasticsearch([host_url])
+                self.client = Elasticsearch([host_url], request_timeout=timeout)
 
-    def get_schema(self) -> str:
-        """Returns the mapping schema of the index or all indices in Elasticsearch."""
-        log.info("[ELASTIC] Fetching schema for indices")
+    def get_schema_structured(self) -> dict:
+        """Return structured index mappings as JSON."""
+        log.info("[ELASTIC] Fetching structured schema")
         if not ES_AVAILABLE:
-            return "Error: elasticsearch library not installed."
+            return {"dialect": "elasticsearch", "indices": [], "error": "elasticsearch not installed"}
 
         try:
-            t0 = time.perf_counter()
-            schema_info = ""
             if self.index_name:
                 indices = [self.index_name]
             else:
-                # Get all non-system indices
                 indices_info = self.client.cat.indices(format="json")
                 indices = [ind["index"] for ind in indices_info if not ind["index"].startswith(".")]
-                
-            if not indices:
-                return "No indices found in this Elasticsearch instance."
-                
+
+            indices_out = []
             for idx in indices:
-                schema_info += f"\nIndex: {idx}\n"
                 try:
                     mapping = self.client.indices.get_mapping(index=idx)
                     properties = mapping[idx]["mappings"].get("properties", {})
+
                     def get_fields(props: dict, prefix: str = "") -> list:
                         fields_list = []
                         for field, details in props.items():
@@ -106,24 +110,44 @@ class ElasticsearchDatabaseManager:
                             if "properties" in details:
                                 fields_list.extend(get_fields(details["properties"], f"{full_name}."))
                             else:
-                                fields_list.append((full_name, field_type or "object"))
+                                fields_list.append({"name": full_name, "type": field_type or "object"})
                         return fields_list
 
-                    if properties:
-                        schema_info += "  Properties:\n"
-                        for field_name, field_type in get_fields(properties):
-                            schema_info += f"    - {field_name} ({field_type})\n"
-                    else:
-                        schema_info += "  (No fields mapped)\n"
+                    indices_out.append({
+                        "name": idx,
+                        "fields": get_fields(properties) if properties else [],
+                    })
                 except Exception as e:
-                    schema_info += f"  (Error fetching mapping: {str(e)})\n"
-                    
-            elapsed = time.perf_counter() - t0
-            log.info("[ELASTIC] Schema fetched in %.2fs", elapsed)
-            return schema_info
+                    indices_out.append({"name": idx, "fields": [], "error": str(e)})
+
+            return {"dialect": "elasticsearch", "indices": indices_out}
         except Exception as e:
-            log.error("[ELASTIC] Error fetching schema: %s", e, exc_info=True)
-            return f"Error fetching Elasticsearch schema: {str(e)}"
+            log.error("[ELASTIC] Error fetching structured schema: %s", e, exc_info=True)
+            return {"dialect": "elasticsearch", "indices": [], "error": str(e)}
+
+    def get_schema(self) -> str:
+        """Returns the mapping schema of the index or all indices in Elasticsearch."""
+        structured = self.get_schema_structured()
+        if structured.get("error") and not structured.get("indices"):
+            return f"Error fetching Elasticsearch schema: {structured['error']}"
+        schema_info = ""
+        indices = structured.get("indices") or []
+        if not indices:
+            return "No indices found in this Elasticsearch instance."
+        for idx in indices:
+            schema_info += f"\nIndex: {idx.get('name')}\n"
+            if idx.get("error"):
+                schema_info += f"  (Error fetching mapping: {idx['error']})\n"
+                continue
+            fields = idx.get("fields") or []
+            if fields:
+                schema_info += "  Properties:\n"
+                for field in fields:
+                    schema_info += f"    - {field.get('name')} ({field.get('type')})\n"
+            else:
+                schema_info += "  (No fields mapped)\n"
+        log.info("[ELASTIC] Schema fetched (%d chars)", len(schema_info))
+        return schema_info
 
     def execute_query(self, es_query_json: str):
         log.info("[ELASTIC] Executing Elasticsearch query")
